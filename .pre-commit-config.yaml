@@ -1,0 +1,10 @@
+minimum_pre_commit_version: "3.7.0"
+ci:
+  autoupdate_schedule: monthly          # keep rev pins fresh
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.3          # pin!
+    hooks:
+      - id: ruff
+      - id: ruff-format   # replaces Black
