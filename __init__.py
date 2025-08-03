@@ -34,6 +34,7 @@ __all__ = [
     "CacheStatus",
     "DEFAULT_CACHE_DIR",
     "DEFAULT_HASH",
+    "__version__",
 ]
 
 if dill is not None:
@@ -46,6 +47,8 @@ def hash_via_stablehash(obj: object) -> str:
     assert stablehash is not None
     return stablehash.stablehash(obj).hexdigest()
 
+
+__version__ = "0.1.0"
 
 memoshelve_cache: dict[str, dict[str, Any]] = {}
 T = TypeVar("T")
