@@ -189,8 +189,18 @@ class TestPerformance:
                 result += i**2 + i
             return result
 
+        def freeze(obj):
+            if isinstance(obj, (tuple, list)):
+                return type(obj)(freeze(o) for o in obj)
+            if isinstance(obj, dict):
+                return tuple((k, freeze(obj[k])) for k in sorted(obj.keys()))
+            return obj
+
+        def fast_hash(obj):
+            return hash(freeze(obj))
+
         # Cached version
-        @cache(filename=cache_file)
+        @cache(filename=cache_file, get_hash_mem=fast_hash)
         def cached_func(x):
             # More substantial computation to make caching overhead relatively smaller
             result = 0
@@ -219,7 +229,7 @@ class TestPerformance:
         # Allow up to 50x overhead to account for hashing, memory lookups, copying, etc.
         ratio = float("inf") if uncached_time == 0 else cached_time / uncached_time
         assert (
-            cached_time < uncached_time * 100
+            cached_time < uncached_time * 75
         ), f"Cache overhead too high: {cached_time:.6f}s vs {uncached_time:.6f}s (ratio: {ratio:.1f}x)"
 
     def test_memory_vs_disk_performance(self, temp_dir):

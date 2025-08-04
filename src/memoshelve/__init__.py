@@ -1287,39 +1287,41 @@ def sync_cache(
             ignore=ignore,
             always_bind=always_bind,
         )
+        if disable:
 
-        def wrapper_with_status(*args, **kwargs):
-            if disable:
+            def wrapper_with_status(*args, **kwargs):  # type: ignore
                 return value(*args, **kwargs), False
-            else:
+
+            def wrapper_get_with_status(*args, **kwargs):  # type: ignore
+                return None, "miss"
+
+            def wrapper_get(*args, **kwargs):  # type: ignore
+                return None
+
+            def wrapper_contains(*args, **kwargs):  # type: ignore
+                return False
+
+            def wrapper_put(val, *args, **kwargs):  # type: ignore
+                return
+        else:
+
+            def wrapper_with_status(*args, **kwargs):
                 with memo() as f:
                     return f.__call_with_status__(*args, **kwargs)
 
-        def wrapper_get_with_status(*args, **kwargs):
-            if disable:
-                return None, "miss"
-            else:
+            def wrapper_get_with_status(*args, **kwargs):
                 with memo() as f:
                     return f.get_with_status(*args, **kwargs)
 
-        def wrapper_get(*args, **kwargs):
-            if disable:
-                return None
-            else:
+            def wrapper_get(*args, **kwargs):
                 with memo() as f:
                     return f.get(*args, **kwargs)
 
-        def wrapper_contains(*args, **kwargs):
-            if disable:
-                return False
-            else:
+            def wrapper_contains(*args, **kwargs):
                 with memo() as f:
                     return f.__contains__(*args, **kwargs)
 
-        def wrapper_put(val, *args, **kwargs):
-            if disable:
-                return
-            else:
+            def wrapper_put(val, *args, **kwargs):
                 with memo() as f:
                     f.put(val, *args, **kwargs)
 
@@ -1402,39 +1404,41 @@ def async_cache(
             ignore=ignore,
             always_bind=always_bind,
         )
+        if disable:
 
-        async def wrapper_with_status(*args, **kwargs):
-            if disable:
+            async def wrapper_with_status(*args, **kwargs):  # type: ignore
                 return await value(*args, **kwargs), "miss"
-            else:
+
+            async def wrapper_get_with_status(*args, **kwargs):  # type: ignore
+                return None, "miss"
+
+            async def wrapper_get(*args, **kwargs):  # type: ignore
+                return None
+
+            async def wrapper_contains(*args, **kwargs):  # type: ignore
+                return False
+
+            async def wrapper_put(val, *args, **kwargs):  # type: ignore
+                return
+        else:
+
+            async def wrapper_with_status(*args, **kwargs):
                 async with memo() as f:
                     return await f.__call_with_status__(*args, **kwargs)
 
-        async def wrapper_get_with_status(*args, **kwargs):
-            if disable:
-                return None, "miss"
-            else:
+            async def wrapper_get_with_status(*args, **kwargs):
                 async with memo() as f:
                     return f.get_with_status(*args, **kwargs)
 
-        async def wrapper_get(*args, **kwargs):
-            if disable:
-                return None
-            else:
+            async def wrapper_get(*args, **kwargs):
                 async with memo() as f:
                     return f.get(*args, **kwargs)
 
-        async def wrapper_contains(*args, **kwargs):
-            if disable:
-                return False
-            else:
+            async def wrapper_contains(*args, **kwargs):
                 async with memo() as f:
                     return f.__contains__(*args, **kwargs)
 
-        async def wrapper_put(val, *args, **kwargs):
-            if disable:
-                return
-            else:
+            async def wrapper_put(val, *args, **kwargs):
                 async with memo() as f:
                     f.put(val, *args, **kwargs)
 
