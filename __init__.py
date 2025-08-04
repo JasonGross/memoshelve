@@ -185,6 +185,238 @@ def lazy_shelve_open(filename: Path | str, *, eager: bool = False):
 CacheStatus = Literal["cached (mem)", "cached (disk)", "miss"]
 
 
+class MemoshelveMetadata:
+    def __init__(
+        self,
+        filename: Path | str,
+        *,
+        get_hash: Callable,
+        get_hash_mem: Callable,
+        get_db: Callable,
+        mem_db: dict[str, Any],
+    ):
+        self.filename = filename
+        self.get_hash = get_hash
+        self.get_hash_mem = get_hash_mem
+        self._get_db = get_db
+        self._mem_db = mem_db
+
+    def disk_keys(self) -> set[str]:
+        with self._get_db() as db:
+            return set(db.keys())
+
+    def disk_items(self):
+        with self._get_db() as db:
+            return list(db.items())
+
+    def disk_values(self):
+        with self._get_db() as db:
+            return list(db.values())
+
+    def mem_keys(self):
+        return self._mem_db.keys()
+
+    def mem_items(self):
+        return self._mem_db.items()
+
+    def mem_values(self):
+        return self._mem_db.values()
+
+    def keys(self):
+        return set(self.disk_keys()) | set(self.mem_keys())
+
+    def items(self):
+        return (dict(self.disk_items()) | self._mem_db).items()
+
+    def values(self):
+        return (dict(self.disk_items()) | self._mem_db).values()
+
+    def compact(self, backup: bool = True):
+        compact(self.filename, backup=backup)
+
+
+class MemoCacheMetadata:
+    def __init__(self, filename: Path | str, f, disable: bool = False):
+        self.disabled = disable
+        self._f = f
+        self.filename = filename
+
+    def get_hash(self, obj):
+        if self.disabled:
+            return "disabled"
+        else:
+            with self._f() as f:
+                return f.memoshelve.get_hash(obj)
+
+    def get_hash_mem(self, obj):
+        if self.disabled:
+            return "disabled"
+        else:
+            with self._f() as f:
+                return f.memoshelve.get_hash_mem(obj)
+
+    def disk_keys(self):
+        if self.disabled:
+            return set()
+        else:
+            with self._f() as f:
+                return f.memoshelve.disk_keys()
+
+    def disk_items(self):
+        if self.disabled:
+            return []
+        else:
+            with self._f() as f:
+                return f.memoshelve.disk_items()
+
+    def disk_values(self):
+        if self.disabled:
+            return []
+        else:
+            with self._f() as f:
+                return f.memoshelve.disk_values()
+
+    def mem_keys(self):
+        if self.disabled:
+            return set()
+        else:
+            with self._f() as f:
+                return f.memoshelve.mem_keys()
+
+    def mem_items(self):
+        if self.disabled:
+            return []
+        else:
+            with self._f() as f:
+                return f.memoshelve.mem_items()
+
+    def mem_values(self):
+        if self.disabled:
+            return []
+        else:
+            with self._f() as f:
+                return f.memoshelve.mem_values()
+
+    def keys(self):
+        if self.disabled:
+            return set()
+        else:
+            with self._f() as f:
+                return f.memoshelve.keys()
+
+    def items(self):
+        if self.disabled:
+            return []
+        else:
+            with self._f() as f:
+                return f.memoshelve.items()
+
+    def values(self):
+        if self.disabled:
+            return []
+        else:
+            with self._f() as f:
+                return f.memoshelve.values()
+
+    def compact(self, backup: bool = True):
+        if self.disabled:
+            return
+        else:
+            with self._f() as f:
+                f.memoshelve.compact(backup=backup)
+
+
+class MemoCacheAsyncMetadata:
+    def __init__(self, filename: Path | str, f, disable: bool = False):
+        self.disabled = disable
+        self._f = f
+        self.filename = filename
+
+    async def get_hash(self, obj):
+        if self.disabled:
+            return "disabled"
+        else:
+            async with self._f() as f:
+                return f.memoshelve.get_hash(obj)
+
+    async def get_hash_mem(self, obj):
+        if self.disabled:
+            return "disabled"
+        else:
+            async with self._f() as f:
+                return f.memoshelve.get_hash_mem(obj)
+
+    async def disk_keys(self):
+        if self.disabled:
+            return set()
+        else:
+            async with self._f() as f:
+                return f.memoshelve.disk_keys()
+
+    async def disk_items(self):
+        if self.disabled:
+            return []
+        else:
+            async with self._f() as f:
+                return f.memoshelve.disk_items()
+
+    async def disk_values(self):
+        if self.disabled:
+            return []
+        else:
+            async with self._f() as f:
+                return f.memoshelve.disk_values()
+
+    async def mem_keys(self):
+        if self.disabled:
+            return set()
+        else:
+            async with self._f() as f:
+                return f.memoshelve.mem_keys()
+
+    async def mem_items(self):
+        if self.disabled:
+            return []
+        else:
+            async with self._f() as f:
+                return f.memoshelve.mem_items()
+
+    async def mem_values(self):
+        if self.disabled:
+            return []
+        else:
+            async with self._f() as f:
+                return f.memoshelve.mem_values()
+
+    async def keys(self):
+        if self.disabled:
+            return set()
+        else:
+            async with self._f() as f:
+                return f.memoshelve.keys()
+
+    async def items(self):
+        if self.disabled:
+            return []
+        else:
+            async with self._f() as f:
+                return f.memoshelve.items()
+
+    async def values(self):
+        if self.disabled:
+            return []
+        else:
+            async with self._f() as f:
+                return f.memoshelve.values()
+
+    async def compact(self, backup: bool = True):
+        if self.disabled:
+            return
+        else:
+            async with self._f() as f:
+                f.memoshelve.compact(backup=backup)
+
+
 def make_make_get_raw(
     value: Callable,
     filename: Path | str,
@@ -328,43 +560,19 @@ def make_make_get_raw(
 
         return get_raw
 
-    def make_disk_keys_items_values(get_db):
-        def disk_keys():
-            with get_db() as db:
-                return set(db.keys())
-
-        def disk_items():
-            with get_db() as db:
-                return list(db.items())
-
-        def disk_values():
-            with get_db() as db:
-                return list(db.values())
-
-        return disk_keys, disk_items, disk_values
-
-    def make_keys_items_values(get_db):
-        disk_keys, disk_items, disk_values = make_disk_keys_items_values(get_db)
-
-        def keys():
-            return set(disk_keys()) | set(mem_db.keys())
-
-        def items():
-            return (dict(disk_items()) | mem_db).items()
-
-        def values():
-            return (dict(disk_items()) | mem_db).values()
-
-        return keys, items, values
-
     return (
         filename,
         get_hash,
         get_hash_mem,
         mem_db,
         make_get_raw,
-        make_keys_items_values,
-        make_disk_keys_items_values,
+        partial(
+            MemoshelveMetadata,
+            filename,
+            get_hash=get_hash,
+            get_hash_mem=get_hash_mem,
+            mem_db=mem_db,
+        ),
     )
 
 
@@ -427,8 +635,7 @@ def memoshelve(
         get_hash_mem,
         mem_db,
         make_get_raw,
-        make_keys_items_values,
-        make_disk_keys_items_values,
+        make_metadata,
     ) = make_make_get_raw(
         value,
         filename,
@@ -456,9 +663,7 @@ def memoshelve(
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
         with lazy_shelve_open(filename, eager=not allow_race) as get_db:
             get_raw = make_get_raw(get_db)
-            mem_keys, mem_items, mem_values = mem_db.keys, mem_db.items, mem_db.values
-            keys, items, values = make_keys_items_values(get_db)
-            disk_keys, disk_items, disk_values = make_disk_keys_items_values(get_db)
+            metadata = make_metadata(get_db=get_db)
 
             def get(*args, **kwargs):
                 result, status = get_raw(*args, **kwargs)
@@ -494,15 +699,7 @@ def memoshelve(
             delegate.get = get
             delegate.__contains__ = contains
             delegate.put = put
-            delegate.memoshelve_mem_keys = mem_keys
-            delegate.memoshelve_mem_items = mem_items
-            delegate.memoshelve_mem_values = mem_values
-            delegate.memoshelve_keys = keys
-            delegate.memoshelve_items = items
-            delegate.memoshelve_values = values
-            delegate.memoshelve_disk_keys = disk_keys
-            delegate.memoshelve_disk_items = disk_items
-            delegate.memoshelve_disk_values = disk_values
+            delegate.memoshelve = metadata
 
             yield delegate
 
@@ -568,8 +765,7 @@ def async_memoshelve(
         get_hash_mem,
         mem_db,
         make_get_raw,
-        make_keys_items_values,
-        make_disk_keys_items_values,
+        make_metadata,
     ) = make_make_get_raw(
         value,
         filename,
@@ -597,9 +793,7 @@ def async_memoshelve(
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
         with lazy_shelve_open(filename, eager=not allow_race) as get_db:
             get_raw = make_get_raw(get_db)
-            mem_keys, mem_items, mem_values = mem_db.keys, mem_db.items, mem_db.values
-            keys, items, values = make_keys_items_values(get_db)
-            disk_keys, disk_items, disk_values = make_disk_keys_items_values(get_db)
+            metadata = make_metadata(get_db=get_db)
 
             def get(*args, **kwargs):
                 result, status = get_raw(*args, **kwargs)
@@ -635,15 +829,7 @@ def async_memoshelve(
             delegate.get = get
             delegate.__contains__ = contains
             delegate.put = put
-            delegate.memoshelve_mem_keys = mem_keys
-            delegate.memoshelve_mem_items = mem_items
-            delegate.memoshelve_mem_values = mem_values
-            delegate.memoshelve_keys = keys
-            delegate.memoshelve_items = items
-            delegate.memoshelve_values = values
-            delegate.memoshelve_disk_keys = disk_keys
-            delegate.memoshelve_disk_items = disk_items
-            delegate.memoshelve_disk_values = disk_values
+            delegate.memoshelve = metadata
 
             yield delegate
 
@@ -822,69 +1008,6 @@ def sync_cache(
                 with memo() as f:
                     f.put(val, *args, **kwargs)
 
-        def wrapper_memoshelve_mem_keys():
-            if disable:
-                return set()
-            else:
-                with memo() as f:
-                    return f.memoshelve_mem_keys()
-
-        def wrapper_memoshelve_mem_items():
-            if disable:
-                return ()
-            else:
-                with memo() as f:
-                    return f.memoshelve_mem_items()
-
-        def wrapper_memoshelve_mem_values():
-            if disable:
-                return ()
-            else:
-                with memo() as f:
-                    return f.memoshelve_mem_values()
-
-        def wrapper_memoshelve_keys():
-            if disable:
-                return ()
-            else:
-                with memo() as f:
-                    return f.memoshelve_keys()
-
-        def wrapper_memoshelve_items():
-            if disable:
-                return ()
-            else:
-                with memo() as f:
-                    return f.memoshelve_items()
-
-        def wrapper_memoshelve_values():
-            if disable:
-                return ()
-            else:
-                with memo() as f:
-                    return f.memoshelve_values()
-
-        def wrapper_memoshelve_disk_keys():
-            if disable:
-                return ()
-            else:
-                with memo() as f:
-                    return f.memoshelve_disk_keys()
-
-        def wrapper_memoshelve_disk_items():
-            if disable:
-                return ()
-            else:
-                with memo() as f:
-                    return f.memoshelve_disk_items()
-
-        def wrapper_memoshelve_disk_values():
-            if disable:
-                return ()
-            else:
-                with memo() as f:
-                    return f.memoshelve_disk_values()
-
         value.__call_with_status__ = wrapper_with_status
         value.get_with_status = wrapper_get_with_status
         value.get = wrapper_get
@@ -897,15 +1020,9 @@ def sync_cache(
             get_hash=get_hash,
             get_hash_mem=get_hash_mem,
         )
-        value.memoshelve_mem_keys = wrapper_memoshelve_mem_keys
-        value.memoshelve_mem_items = wrapper_memoshelve_mem_items
-        value.memoshelve_mem_values = wrapper_memoshelve_mem_values
-        value.memoshelve_keys = wrapper_memoshelve_keys
-        value.memoshelve_items = wrapper_memoshelve_items
-        value.memoshelve_values = wrapper_memoshelve_values
-        value.memoshelve_disk_keys = wrapper_memoshelve_disk_keys
-        value.memoshelve_disk_items = wrapper_memoshelve_disk_items
-        value.memoshelve_disk_values = wrapper_memoshelve_disk_values
+        value.memoshelve = MemoCacheMetadata(
+            str(path.absolute()), memo, disable=disable
+        )
 
         @wraps(value)
         def wrapper(*args, **kwargs):
@@ -998,69 +1115,6 @@ def async_cache(
                 async with memo() as f:
                     f.put(val, *args, **kwargs)
 
-        async def wrapper_memoshelve_mem_keys():
-            if disable:
-                return set()
-            else:
-                async with memo() as f:
-                    return f.memoshelve_mem_keys()
-
-        async def wrapper_memoshelve_mem_items():
-            if disable:
-                return ()
-            else:
-                async with memo() as f:
-                    return f.memoshelve_mem_items()
-
-        async def wrapper_memoshelve_mem_values():
-            if disable:
-                return ()
-            else:
-                async with memo() as f:
-                    return f.memoshelve_mem_values()
-
-        async def wrapper_memoshelve_keys():
-            if disable:
-                return ()
-            else:
-                async with memo() as f:
-                    return f.memoshelve_keys()
-
-        async def wrapper_memoshelve_items():
-            if disable:
-                return ()
-            else:
-                async with memo() as f:
-                    return f.memoshelve_items()
-
-        async def wrapper_memoshelve_values():
-            if disable:
-                return ()
-            else:
-                async with memo() as f:
-                    return f.memoshelve_values()
-
-        async def wrapper_memoshelve_disk_keys():
-            if disable:
-                return ()
-            else:
-                async with memo() as f:
-                    return f.memoshelve_disk_keys()
-
-        async def wrapper_memoshelve_disk_items():
-            if disable:
-                return ()
-            else:
-                async with memo() as f:
-                    return f.memoshelve_disk_items()
-
-        async def wrapper_memoshelve_disk_values():
-            if disable:
-                return ()
-            else:
-                async with memo() as f:
-                    return f.memoshelve_disk_values()
-
         value.__call_with_status__ = wrapper_with_status
         value.get_with_status = wrapper_get_with_status
         value.get = wrapper_get
@@ -1073,15 +1127,9 @@ def async_cache(
             get_hash=get_hash,
             get_hash_mem=get_hash_mem,
         )
-        value.memoshelve_mem_keys = wrapper_memoshelve_mem_keys
-        value.memoshelve_mem_items = wrapper_memoshelve_mem_items
-        value.memoshelve_mem_values = wrapper_memoshelve_mem_values
-        value.memoshelve_keys = wrapper_memoshelve_keys
-        value.memoshelve_items = wrapper_memoshelve_items
-        value.memoshelve_values = wrapper_memoshelve_values
-        value.memoshelve_disk_keys = wrapper_memoshelve_disk_keys
-        value.memoshelve_disk_items = wrapper_memoshelve_disk_items
-        value.memoshelve_disk_values = wrapper_memoshelve_disk_values
+        value.memoshelve = MemoCacheAsyncMetadata(
+            str(path.absolute()), memo, disable=disable
+        )
 
         @wraps(value)
         async def wrapper(*args, **kwargs):

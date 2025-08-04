@@ -456,16 +456,16 @@ class TestCacheInspection:
         square(4)
 
         # Test inspection methods
-        keys = square.memoshelve_keys()
+        keys = square.memoshelve.keys()
         assert len(keys) >= 3
 
-        values = list(square.memoshelve_values())
+        values = list(square.memoshelve.values())
         assert 4 in values
         assert 9 in values
         assert 16 in values
 
         # Test disk-specific methods
-        disk_keys = square.memoshelve_disk_keys()
+        disk_keys = square.memoshelve.disk_keys()
         assert len(list(disk_keys)) >= 3
 
 
