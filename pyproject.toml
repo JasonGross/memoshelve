@@ -9,7 +9,12 @@ dependencies = []
 [project.optional-dependencies]
 # n.b. typing-extensions is required for stablehash, but not declared, cf https://github.com/NiklasRosenstein/python-stablehash/issues/9
 robust = ["dill>=0.4.0", "stablehash>=0.2.3", "typing-extensions>=4.14.1"]
-testing = ["numpy>=2.3.2", "pytest>=8.4.1", "pytest-asyncio>=1.1.0"]
+testing = [
+    "numpy>=2.3.2",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
+    "memoshelve[robust]",
+]
 dev = ["pre-commit>=4.2.0", "memoshelve[testing]"]
 all = ["memoshelve[robust,testing,dev]"]
 
