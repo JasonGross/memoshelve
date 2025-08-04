@@ -172,6 +172,10 @@ class TestIntegration:
 class TestPerformance:
     """Performance benchmarks for caching."""
 
+    @pytest.mark.skipif(
+        platform.system() == "Windows",
+        reason="Windows is too fast at uncached operations :-/",
+    )
     def test_cache_overhead(self, temp_dir):
         """Measure caching overhead for simple functions."""
         cache_file = temp_dir / "overhead.shelve"
