@@ -84,6 +84,9 @@ def backup_file(
         strip_suffix = ext[1:].isdigit()
     new_suffix = ext if strip_suffix else filename.suffix + ext
     backup_name = filename.with_suffix(new_suffix)
+    assert (
+        backup_name != filename
+    ), f"backup_file({filename!r}, ext={ext!r}, strip_suffix={strip_suffix!r})"
     if filename.exists():
         if backup_name.exists():
             next_ext, strip_suffix = next_backup_ext(ext, strip_suffix=strip_suffix)
