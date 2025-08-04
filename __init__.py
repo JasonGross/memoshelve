@@ -292,7 +292,7 @@ def make_make_get_raw(
             try:
                 result = mem_db[mkey]
                 print_mem_cache_hit(f"Cache hit (mem): {mkey}")
-                return result, "cached (mem)"
+                return copy(result), "cached (mem)"
             except KeyError:
                 print_mem_cache_miss(f"Cache miss (mem): {mkey}")
                 key = str(get_hash((args, kwargs)))
@@ -300,7 +300,7 @@ def make_make_get_raw(
                     with get_db() as db:
                         mem_db[mkey] = db[key]
                     print_disk_cache_hit(f"Cache hit (disk: {filename}): {key}")
-                    return mem_db[mkey], "cached (disk)"
+                    return copy(mem_db[mkey]), "cached (disk)"
                 except Exception as e:
                     if isinstance(e, KeyError):
                         frames = traceback.extract_stack()
