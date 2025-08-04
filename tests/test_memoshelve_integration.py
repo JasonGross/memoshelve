@@ -312,6 +312,8 @@ class TestErrorHandling:
         func(5)
 
         # Make cache file read-only
+        if not cache_file.exists():
+            cache_file.touch()
         cache_file.chmod(0o444)
 
         try:
