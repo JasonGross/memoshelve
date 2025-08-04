@@ -30,7 +30,7 @@ jobs:
         current_version="$(uv version | cut -d' ' -f2)"
         new_version="${current_version}.dev$(date +%s)"
         uv version "$new_version"
-        sed -i "s/^__version__ = .*/__version__ = \"$new_version\"/g" __init__.py
+        git ls-files "*.py" | xargs sed -i "s/^__version__ = .*/__version__ = \"$new_version\"/g"
       if: ${{ ! ( startsWith(github.ref, 'refs/tags/') && github.event_name == 'release' ) }}
     - name: Build a binary wheel and a source tarball
       run: uv build
@@ -39,13 +39,14 @@ jobs:
       with:
         name: python-package-distributions
         path: dist/
-    - name: Store the file modifications
+    - name: tar modified files
+      run: |
+        git diff --name-only | xargs tar -czf modified-files.tar.gz
+    - name: Store the modified files
       uses: actions/upload-artifact@v4
       with:
-        name: python-package-modifications
-        path: |
-          __init__.py
-          pyproject.toml
+        name: modified-files
+        path: modified-files.tar.gz
 
   publish-to-pypi:
     name: >-
@@ -69,12 +70,15 @@ jobs:
     - name: Download all the file modifications
       uses: actions/download-artifact@v4
       with:
-        name: python-package-modifications
+        name: modified-files
+        path: modified-files.tar.gz
+    - name: Extract the modified files
+      run: tar -xzf modified-files.tar.gz
+    - run: git --no-pager diff
     - name: Install uv
       uses: astral-sh/setup-uv@v4
       with:
         version: "latest"
-    - run: git --no-pager diff
     - name: Publish distribution 📦 to PyPI
       run: uv publish
 
@@ -102,12 +106,15 @@ jobs:
     - name: Download all the file modifications
       uses: actions/download-artifact@v4
       with:
-        name: python-package-modifications
+        name: modified-files
+        path: modified-files.tar.gz
+    - name: Extract the modified files
+      run: tar -xzf modified-files.tar.gz
+    - run: git --no-pager diff
     - name: Install uv
       uses: astral-sh/setup-uv@v4
       with:
         version: "latest"
-    - run: git --no-pager diff
     - name: Publish distribution 📦 to TestPyPI
       run: uv publish --index testpypi
 
@@ -170,7 +177,7 @@ jobs:
           exit 1
         fi
         uv version --bump patch
-        sed -i "s/^__version__ = .*/__version__ = \"$new_version\"/g" __init__.py
+        git ls-files "*.py" | xargs sed -i "s/^__version__ = .*/__version__ = \"$new_version\"/g"
         remote_repo="https://${GITHUB_ACTOR}:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
         git config http.sslVerify false
         git config user.name "Automated Publisher"
@@ -183,7 +190,7 @@ jobs:
         git checkout -b temp
         git branch -D main || true
         git checkout -b main publisher/main
-        git add pyproject.toml __init__.py
+        git add pyproject.toml src/memoshelve/__init__.py
         timestamp=$(date -u)
         git commit -m "Automated Package Version Bump: ${timestamp} ${GITHUB_SHA}"
         git push publisher main
