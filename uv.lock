@@ -67,7 +67,7 @@ wheels = [
 
 [[package]]
 name = "memoshelve"
-version = "0.1.3"
+version = "1.0.0"
 source = { virtual = "." }
 
 [package.optional-dependencies]
