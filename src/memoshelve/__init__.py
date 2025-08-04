@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager, contextmanager
 from functools import partial, wraps
 from pathlib import Path
 from pickle import UnpicklingError
-from typing import Any, Callable, Literal, Optional, TypeVar
+from typing import Any, Callable, Collection, Literal, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -614,10 +614,53 @@ class MemoCacheAsyncMetadata:
                 )
 
 
+def make_compute_cache_tuple(
+    value: Callable[..., T] | None,
+    ignore: Collection[str],
+    always_bind: bool,
+) -> Callable[..., tuple[tuple, dict[str, Any]]]:
+    sig = inspect.signature(value or (lambda *_args, **_kwargs: None))
+
+    def compute_cache_tuple(*args, **kwargs) -> tuple[tuple, dict[str, Any]]:
+        if not always_bind and not ignore:
+            return (args, kwargs)
+        assert (
+            value is not None
+        ), "value must be provided if always_bind is True or ignore is not empty"
+        try:
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+        except TypeError as e:
+            if always_bind:
+                # For always_bind, try partial binding and apply defaults
+                try:
+                    bound = sig.bind_partial(*args, **kwargs)
+                    bound.apply_defaults()
+                    filtered = {
+                        k: v for k, v in bound.arguments.items() if k not in ignore
+                    }
+                    return ((), filtered)
+                except TypeError:
+                    pass
+
+            # Fallback when binding fails and always_bind is False
+            if ignore and any(param in kwargs for param in ignore):
+                logging.error(
+                    f"Attempted to bind args to ignore {ignore} in {value!r} with signature {sig} but got {e}"
+                )
+
+            return (args, {k: v for k, v in kwargs.items() if k not in ignore})
+        filtered = {k: v for k, v in bound.arguments.items() if k not in ignore}
+        return ((), filtered)
+
+    return compute_cache_tuple
+
+
 def make_make_get_raw(
     value: Callable[..., T],
     filename: Path | str,
     cache: dict[str, dict[str, Any]] = memoshelve_cache,
+    *,
     get_hash: Callable | None = None,
     get_hash_mem: Callable | None = None,
     print_cache_miss: bool | None = None,
@@ -629,6 +672,8 @@ def make_make_get_raw(
     print_extended_cache_miss_disk: bool = False,
     copy: Callable[[T], T] = lambda x: x,
     allow_race: bool = True,
+    ignore: Collection[str] = (),
+    always_bind: bool = False,
 ):
     """Create a memoized version of a function using shelve + in-memory cache.
 
@@ -715,6 +760,10 @@ def make_make_get_raw(
     if get_hash_mem is None:
         get_hash_mem = get_hash
 
+    compute_cache_tuple = make_compute_cache_tuple(
+        value, ignore=ignore, always_bind=always_bind
+    )
+
     def make_get_raw(get_db):
         def get_raw_tuple(
             *args, **kwargs
@@ -725,7 +774,8 @@ def make_make_get_raw(
             ]
             | tuple[tuple[tuple[str, str], tuple, dict[str, Any]], Literal["miss"]]
         ):
-            mkey = get_hash_mem((args, kwargs))
+            cache_tuple = compute_cache_tuple(*args, **kwargs)
+            mkey = get_hash_mem(cache_tuple)
             try:
                 result = mem_db[mkey]
                 assert isinstance(result, tuple), result
@@ -734,7 +784,7 @@ def make_make_get_raw(
                 return result, "cached (mem)"
             except KeyError:
                 print_mem_cache_miss(f"Cache miss (mem): {mkey}")
-                key = str(get_hash((args, kwargs)))
+                key = str(get_hash(cache_tuple))
                 try:
                     with get_db() as db:
                         mem_db[mkey] = db[key]
@@ -766,7 +816,7 @@ def make_make_get_raw(
                         logger.error(f"Error {e} in {filename} with key {key}")
                     if not isinstance(e, (KeyError, AttributeError, UnpicklingError)):
                         raise e
-                return ((mkey, key), args, kwargs), "miss"
+                return ((mkey, key), *cache_tuple), "miss"
 
         def get_raw(
             *args, **kwargs
@@ -785,6 +835,7 @@ def make_make_get_raw(
         get_hash_mem,
         mem_db,
         make_get_raw,
+        compute_cache_tuple,
         partial(
             MemoshelveMetadata,
             filename,
@@ -799,6 +850,7 @@ def memoshelve(
     value: Callable,
     filename: Path | str,
     cache: dict[str, dict[str, Any]] = memoshelve_cache,
+    *,
     get_hash: Callable | None = None,
     get_hash_mem: Callable | None = None,
     print_cache_miss: bool | None = None,
@@ -810,6 +862,8 @@ def memoshelve(
     print_extended_cache_miss_disk: bool = False,
     copy: Callable[[T], T] = lambda x: x,
     allow_race: bool = True,
+    ignore: Collection[str] = (),
+    always_bind: bool = False,
 ):
     """Create a memoized version of a function using shelve + in-memory cache.
 
@@ -831,6 +885,8 @@ def memoshelve(
         print_extended_cache_miss_disk: Include extended traceback info in disk cache miss logs
         copy: Function to copy cached values (default: identity function)
         allow_race: Allow race conditions in cache updates (default: True)
+        ignore: Collection of argument names to ignore in cache key computation
+        always_bind: Always bind arguments to the function signature for cache key computation (default: False)
 
     Returns:
         A context manager that yields a memoized function with additional methods:
@@ -854,22 +910,25 @@ def memoshelve(
         get_hash_mem,
         mem_db,
         make_get_raw,
+        compute_cache_tuple,
         make_metadata,
     ) = make_make_get_raw(
         value,
-        filename,
-        cache,
-        get_hash,
-        get_hash_mem,
-        print_cache_miss,
-        print_cache_hit,
-        print_disk_cache_miss,
-        print_disk_cache_hit,
-        print_mem_cache_miss,
-        print_mem_cache_hit,
-        print_extended_cache_miss_disk,
-        copy,
-        allow_race,
+        filename=filename,
+        cache=cache,
+        get_hash=get_hash,
+        get_hash_mem=get_hash_mem,
+        print_cache_miss=print_cache_miss,
+        print_cache_hit=print_cache_hit,
+        print_disk_cache_miss=print_disk_cache_miss,
+        print_disk_cache_hit=print_disk_cache_hit,
+        print_mem_cache_miss=print_mem_cache_miss,
+        print_mem_cache_hit=print_mem_cache_hit,
+        print_extended_cache_miss_disk=print_extended_cache_miss_disk,
+        copy=copy,
+        allow_race=allow_race,
+        ignore=ignore,
+        always_bind=always_bind,
     )
 
     # filename = str(Path(filename).absolute())
@@ -892,21 +951,28 @@ def memoshelve(
                 _, status = get_raw(*args, **kwargs)
                 return status != "miss"
 
-            def put(value, *args, **kwargs):
-                mkey = get_hash_mem((args, kwargs))
-                key = str(get_hash((args, kwargs)))
+            def put_raw_via_key(value, key, mkey, *args, **kwargs):
+                cache_tuple = compute_cache_tuple(*args, **kwargs)
+                if mkey is None:
+                    mkey = get_hash_mem(cache_tuple)
+                if key is None:
+                    key = str(get_hash(cache_tuple))
                 with get_db() as db:
-                    mem_db[mkey] = db[key] = (value, args, kwargs)
+                    db[key] = mem_db[mkey] = (value, *cache_tuple)
+                return mem_db[mkey][0]
+
+            def put(value, *args, **kwargs):
+                put_raw_via_key(value, None, None, *args, **kwargs)
 
             def delegate_raw(*args, **kwargs):
                 result, status = get_raw(*args, **kwargs)
                 if status == "miss":
                     assert isinstance(result, tuple), result
                     mkey, key = result
-                    mem_db[mkey] = (copy(value(*args, **kwargs)), args, kwargs)
-                    with get_db() as db:
-                        db[key] = mem_db[mkey]
-                    return mem_db[mkey][0], "miss"
+                    result = put_raw_via_key(
+                        copy(value(*args, **kwargs)), key, mkey, *args, **kwargs
+                    )
+                    return result, "miss"
                 else:
                     return result, status
 
@@ -941,6 +1007,8 @@ def async_memoshelve(
     print_extended_cache_miss_disk: bool = False,
     copy: Callable[[T], T] = lambda x: x,
     allow_race: bool = True,
+    ignore: Collection[str] = (),
+    always_bind: bool = False,
 ):
     """Create a memoized version of a function using shelve + in-memory cache.
 
@@ -962,6 +1030,8 @@ def async_memoshelve(
         print_extended_cache_miss_disk: Include extended traceback info in disk cache miss logs
         copy: Function to copy cached values (default: identity function)
         allow_race: Allow race conditions in cache updates (default: True)
+        ignore: Collection of argument names to ignore in cache key computation
+        always_bind: Always bind arguments to the function signature for cache key computation (default: False)
 
     Returns:
         A context manager that yields a memoized function with additional methods:
@@ -985,22 +1055,25 @@ def async_memoshelve(
         get_hash_mem,
         mem_db,
         make_get_raw,
+        compute_cache_tuple,
         make_metadata,
     ) = make_make_get_raw(
         value,
         filename,
         cache,
-        get_hash,
-        get_hash_mem,
-        print_cache_miss,
-        print_cache_hit,
-        print_disk_cache_miss,
-        print_disk_cache_hit,
-        print_mem_cache_miss,
-        print_mem_cache_hit,
-        print_extended_cache_miss_disk,
-        copy,
-        allow_race,
+        get_hash=get_hash,
+        get_hash_mem=get_hash_mem,
+        print_cache_miss=print_cache_miss,
+        print_cache_hit=print_cache_hit,
+        print_disk_cache_miss=print_disk_cache_miss,
+        print_disk_cache_hit=print_disk_cache_hit,
+        print_mem_cache_miss=print_mem_cache_miss,
+        print_mem_cache_hit=print_mem_cache_hit,
+        print_extended_cache_miss_disk=print_extended_cache_miss_disk,
+        copy=copy,
+        allow_race=allow_race,
+        ignore=ignore,
+        always_bind=always_bind,
     )
 
     # filename = str(Path(filename).absolute())
@@ -1023,21 +1096,28 @@ def async_memoshelve(
                 _, status = get_raw(*args, **kwargs)
                 return status != "miss"
 
-            def put(value, *args, **kwargs):
-                mkey = get_hash_mem((args, kwargs))
-                key = str(get_hash((args, kwargs)))
+            def put_raw_via_key(value, key, mkey, *args, **kwargs):
+                cache_tuple = compute_cache_tuple(*args, **kwargs)
+                if mkey is None:
+                    mkey = get_hash_mem(cache_tuple)
+                if key is None:
+                    key = str(get_hash(cache_tuple))
                 with get_db() as db:
-                    mem_db[mkey] = db[key] = (value, args, kwargs)
+                    db[key] = mem_db[mkey] = (value, *cache_tuple)
+                return mem_db[mkey][0]
+
+            def put(value, *args, **kwargs):
+                put_raw_via_key(value, None, None, *args, **kwargs)
 
             async def delegate_raw(*args, **kwargs):
                 result, status = get_raw(*args, **kwargs)
                 if status == "miss":
                     assert isinstance(result, tuple), result
                     mkey, key = result
-                    mem_db[mkey] = (copy(await value(*args, **kwargs)), args, kwargs)
-                    with get_db() as db:
-                        db[key] = mem_db[mkey]
-                    return mem_db[mkey][0], "miss"
+                    result = put_raw_via_key(
+                        copy(await value(*args, **kwargs)), key, mkey, *args, **kwargs
+                    )
+                    return result, "miss"
                 else:
                     return result, status
 
@@ -1063,6 +1143,9 @@ def uncache(
     cache: dict[str, dict[str, Any]] = memoshelve_cache,
     get_hash: Callable | None = None,
     get_hash_mem: Callable | None = None,
+    ignore: Collection[str] = (),
+    always_bind: bool = False,
+    value: Callable | None = None,
     **kwargs,
 ):
     """Remove cached entries for specific arguments from both memory and disk cache.
@@ -1091,11 +1174,15 @@ def uncache(
     if get_hash_mem is None:
         get_hash_mem = get_hash
 
+    cache_tuple = make_compute_cache_tuple(
+        value, ignore=ignore, always_bind=always_bind
+    )(*args, **kwargs)
+
     with shelve.open(filename) as db:
-        mkey = get_hash_mem((args, kwargs))
+        mkey = get_hash_mem(cache_tuple)
         if mkey in mem_db:
             del mem_db[mkey]
-        key = get_hash((args, kwargs))
+        key = str(get_hash(cache_tuple))
         if key in db:
             del db[key]
 
@@ -1104,6 +1191,7 @@ def uncache(
 def sync_cache(
     filename: Path | str | None = None,
     cache: dict[str, dict[str, Any]] = memoshelve_cache,
+    *,
     get_hash: Callable | None = None,
     get_hash_mem: Callable | None = None,
     print_cache_miss: bool | None = None,
@@ -1116,6 +1204,8 @@ def sync_cache(
     disable: bool = False,
     copy: Callable[[T], T] = lambda x: x,
     allow_race: bool = True,
+    ignore: Collection[str] = (),
+    always_bind: bool = False,
 ):
     """Decorator for memoizing functions with two-tier caching (memory + disk).
 
@@ -1138,6 +1228,8 @@ def sync_cache(
         disable: Disable caching entirely (default: False)
         copy: Function to copy cached values (default: identity function)
         allow_race: Allow race conditions in cache updates (default: True)
+        ignore: Collection of argument names to ignore in cache key computation
+        always_bind: Always bind arguments to the function signature for cache key computation (default: False)
 
     Returns:
         A decorator function that wraps the target function with caching capabilities.
@@ -1192,6 +1284,8 @@ def sync_cache(
             print_extended_cache_miss_disk=print_extended_cache_miss_disk,
             copy=copy,
             allow_race=allow_race,
+            ignore=ignore,
+            always_bind=always_bind,
         )
 
         def wrapper_with_status(*args, **kwargs):
@@ -1240,6 +1334,9 @@ def sync_cache(
             cache=cache,
             get_hash=get_hash,
             get_hash_mem=get_hash_mem,
+            ignore=ignore,
+            always_bind=always_bind,
+            value=value,
         )
         value.memoshelve = MemoCacheMetadata(
             str(path.absolute()), memo, disable=disable
@@ -1258,6 +1355,7 @@ def sync_cache(
 def async_cache(
     filename: Path | str | None = None,
     cache: dict[str, dict[str, Any]] = memoshelve_cache,
+    *,
     get_hash: Callable | None = None,
     get_hash_mem: Callable | None = None,
     print_cache_miss: bool | None = None,
@@ -1270,6 +1368,8 @@ def async_cache(
     disable: bool = False,
     copy: Callable[[T], T] = lambda x: x,
     allow_race: bool = True,
+    ignore: Collection[str] = (),
+    always_bind: bool = False,
 ):
     """Decorator for memoizing async functions with two-tier caching (memory + disk).
 
@@ -1299,6 +1399,8 @@ def async_cache(
             print_extended_cache_miss_disk=print_extended_cache_miss_disk,
             copy=copy,
             allow_race=allow_race,
+            ignore=ignore,
+            always_bind=always_bind,
         )
 
         async def wrapper_with_status(*args, **kwargs):
@@ -1347,6 +1449,9 @@ def async_cache(
             cache=cache,
             get_hash=get_hash,
             get_hash_mem=get_hash_mem,
+            ignore=ignore,
+            always_bind=always_bind,
+            value=value,
         )
         value.memoshelve = MemoCacheAsyncMetadata(
             str(path.absolute()), memo, disable=disable
@@ -1365,6 +1470,7 @@ def async_cache(
 def cache(
     filename: Path | str | None = None,
     cache: dict[str, dict[str, Any]] = memoshelve_cache,
+    *,
     get_hash: Callable | None = None,
     get_hash_mem: Callable | None = None,
     print_cache_miss: bool | None = None,
@@ -1377,6 +1483,8 @@ def cache(
     disable: bool = False,
     copy: Callable[[T], T] = lambda x: x,
     allow_race: bool = True,
+    ignore: Collection[str] = (),
+    always_bind: bool = False,
 ):
     """Decorator for memoizing functions with two-tier caching, choosing sync or async based on the function type."""
 
@@ -1397,6 +1505,8 @@ def cache(
                 disable=disable,
                 copy=copy,
                 allow_race=allow_race,
+                ignore=ignore,
+                always_bind=always_bind,
             )(func)
         else:
             return sync_cache(
@@ -1414,6 +1524,8 @@ def cache(
                 disable=disable,
                 copy=copy,
                 allow_race=allow_race,
+                ignore=ignore,
+                always_bind=always_bind,
             )(func)
 
     return decorator

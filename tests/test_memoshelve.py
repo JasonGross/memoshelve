@@ -533,5 +533,297 @@ class TestExtendedFeatures:
         assert str(cache_file) in custom_cache
 
 
+class TestIgnoreParameter:
+    """Test the ignore parameter functionality."""
+
+    def test_basic_ignore(self, temp_cache_dir):
+        """Test basic ignore functionality with positional arguments."""
+        cache_file = temp_cache_dir / "ignore_basic.shelve"
+        call_count = 0
+
+        @cache(filename=cache_file, ignore=["y"])
+        def compute(x, y, z):
+            nonlocal call_count
+            call_count += 1
+            return x + y + z
+
+        # First call
+        result1 = compute(1, 2, 3)
+        assert result1 == 6
+        assert call_count == 1
+
+        # Second call with different y - should hit cache since y is ignored
+        result2 = compute(1, 99, 3)
+        assert result2 == 6  # Returns cached value
+        assert call_count == 1  # Function not called again
+
+        # Third call with different x - should miss cache
+        result3 = compute(2, 2, 3)
+        assert result3 == 7
+        assert call_count == 2
+
+    def test_ignore_kwargs(self, temp_cache_dir):
+        """Test ignoring keyword arguments."""
+        cache_file = temp_cache_dir / "ignore_kwargs.shelve"
+        call_count = 0
+
+        @cache(filename=cache_file, ignore=["debug", "verbose"])
+        def process_data(data, debug=False, verbose=False, mode="fast"):
+            nonlocal call_count
+            call_count += 1
+            if debug:
+                print(f"Processing {data}")
+            return len(data) * (2 if mode == "fast" else 3)
+
+        # First call
+        result1 = process_data("hello", debug=True, verbose=True)
+        assert result1 == 10
+        assert call_count == 1
+
+        # Second call with different ignored kwargs - should hit cache
+        result2 = process_data("hello", debug=False, verbose=False)
+        assert result2 == 10
+        assert call_count == 1
+
+        # Third call with different non-ignored kwarg - should miss cache
+        result3 = process_data("hello", mode="slow")
+        assert result3 == 15
+        assert call_count == 2
+
+    def test_ignore_mixed_args(self, temp_cache_dir):
+        """Test ignoring with mixed positional and keyword arguments."""
+        cache_file = temp_cache_dir / "ignore_mixed.shelve"
+        call_count = 0
+
+        @cache(filename=cache_file, ignore=["b", "d"])
+        def complex_func(a, b, c=10, d=20):
+            nonlocal call_count
+            call_count += 1
+            return a * b + c * d
+
+        # Test various calling patterns
+        result1 = complex_func(2, 3, c=10, d=20)
+        assert result1 == 206
+        assert call_count == 1
+
+        # Different b and d - should hit cache
+        result2 = complex_func(2, 99, c=10, d=99)
+        assert result2 == 206
+        assert call_count == 1
+
+        # Different a - should miss cache
+        result3 = complex_func(3, 3, c=10, d=20)
+        assert result3 == 209
+        assert call_count == 2
+
+        # Different c - should miss cache
+        result4 = complex_func(2, 3, c=20, d=20)
+        assert result4 == 406
+        assert call_count == 3
+
+    def test_ignore_all_args(self, temp_cache_dir):
+        """Test ignoring all arguments (edge case)."""
+        cache_file = temp_cache_dir / "ignore_all.shelve"
+        call_count = 0
+
+        @cache(filename=cache_file, ignore=["x", "y"])
+        def always_cached(x, y):
+            nonlocal call_count
+            call_count += 1
+            return call_count  # Return call count to verify caching
+
+        # All calls should return the same cached value
+        assert always_cached(1, 2) == 1
+        assert always_cached(3, 4) == 1
+        assert always_cached(99, 99) == 1
+        assert call_count == 1
+
+    def test_ignore_nonexistent_arg(self, temp_cache_dir):
+        """Test ignoring argument names that don't exist."""
+        cache_file = temp_cache_dir / "ignore_nonexistent.shelve"
+
+        @cache(filename=cache_file, ignore=["nonexistent", "y"])
+        def func(x, y):
+            return x + y
+
+        # Should work normally, ignoring the nonexistent parameter name
+        result1 = func(1, 2)
+        assert result1 == 3
+
+        # Different y should hit cache
+        result2 = func(1, 99)
+        assert result2 == 3
+
+    def test_always_bind_parameter(self, temp_cache_dir):
+        """Test the always_bind parameter."""
+        cache_file = temp_cache_dir / "always_bind.shelve"
+        call_count = 0
+
+        @cache(filename=cache_file, always_bind=True)
+        def func_with_defaults(a, b=10, c=20):
+            nonlocal call_count
+            call_count += 1
+            return a + b + c
+
+        # These should all be treated as the same call due to always_bind
+        result1 = func_with_defaults(1)
+        assert result1 == 31
+        assert call_count == 1
+
+        result2 = func_with_defaults(1, 10)
+        assert result2 == 31
+        assert call_count == 1  # Should hit cache
+
+        result3 = func_with_defaults(1, b=10, c=20)
+        assert result3 == 31
+        assert call_count == 1  # Should hit cache
+
+        # Different actual values should miss cache
+        result4 = func_with_defaults(1, 20)
+        assert result4 == 41
+        assert call_count == 2
+
+    def test_ignore_with_always_bind(self, temp_cache_dir):
+        """Test using ignore and always_bind together."""
+        cache_file = temp_cache_dir / "ignore_always_bind.shelve"
+        call_count = 0
+
+        @cache(filename=cache_file, ignore=["debug"], always_bind=True)
+        def process(data, mode="fast", debug=False):
+            nonlocal call_count
+            call_count += 1
+            return f"{data}_{mode}"
+
+        # All these should hit the same cache entry
+        result1 = process("test", debug=True)
+        assert result1 == "test_fast"
+        assert call_count == 1
+
+        result2 = process("test", "fast", False)
+        assert result2 == "test_fast"
+        assert call_count == 1
+
+        result3 = process("test", mode="fast", debug=False)
+        assert result3 == "test_fast"
+        assert call_count == 1
+
+        # Different mode should miss cache
+        result4 = process("test", mode="slow", debug=True)
+        assert result4 == "test_slow"
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_async_ignore(self, temp_cache_dir):
+        """Test ignore parameter with async functions."""
+        cache_file = temp_cache_dir / "async_ignore.shelve"
+        call_count = 0
+
+        @cache(filename=cache_file, ignore=["delay"])
+        async def async_compute(x, y, delay=0.01):
+            nonlocal call_count
+            call_count += 1
+            await asyncio.sleep(delay)
+            return x * y
+
+        # First call
+        result1 = await async_compute(3, 4, delay=0.01)
+        assert result1 == 12
+        assert call_count == 1
+
+        # Second call with different delay - should hit cache
+        result2 = await async_compute(3, 4, delay=1.0)
+        assert result2 == 12
+        assert call_count == 1
+
+        # Third call with different x - should miss cache
+        result3 = await async_compute(4, 4, delay=0.01)
+        assert result3 == 16
+        assert call_count == 2
+
+    def test_ignore_with_varargs(self, temp_cache_dir):
+        """Test ignore parameter with *args."""
+        cache_file = temp_cache_dir / "ignore_varargs.shelve"
+        call_count = 0
+
+        @cache(filename=cache_file, ignore=["b"])
+        def func_varargs(a, b, *args):
+            nonlocal call_count
+            call_count += 1
+            return a + b + sum(args)
+
+        # First call
+        result1 = func_varargs(1, 2, 3, 4)
+        assert result1 == 10
+        assert call_count == 1
+
+        # Different b - should hit cache
+        result2 = func_varargs(1, 99, 3, 4)
+        assert result2 == 10
+        assert call_count == 1
+
+        # Different varargs - should miss cache
+        result3 = func_varargs(1, 2, 5, 6)
+        assert result3 == 14
+        assert call_count == 2
+
+    def test_ignore_with_status(self, temp_cache_dir):
+        """Test that ignore works correctly with status tracking."""
+        cache_file = temp_cache_dir / "ignore_status.shelve"
+
+        @cache(filename=cache_file, ignore=["timestamp"])
+        def log_event(event_type, message, timestamp=None):
+            return f"{event_type}: {message}"
+
+        # First call
+        result1, status1 = log_event.__call_with_status__(
+            "INFO", "Started", timestamp=12345
+        )
+        assert result1 == "INFO: Started"
+        assert status1 == "miss"
+
+        # Second call with different timestamp - should hit cache
+        result2, status2 = log_event.__call_with_status__(
+            "INFO", "Started", timestamp=67890
+        )
+        assert result2 == "INFO: Started"
+        assert status2 == "cached (mem)"
+
+    def test_ignore_with_put_operation(self, temp_cache_dir):
+        """Test that put operation works correctly with ignore."""
+        cache_file = temp_cache_dir / "ignore_put.shelve"
+
+        @cache(filename=cache_file, ignore=["version"])
+        def compute(x, version=1):
+            return x * 2
+
+        # Manually put a value
+        compute.put(100, 5, version=1)
+
+        # Should retrieve the put value even with different version
+        result = compute(5, version=99)
+        assert result == 100
+
+    def test_ignore_type_error_handling(self, temp_cache_dir):
+        """Test handling of TypeError when binding fails."""
+        cache_file = temp_cache_dir / "ignore_type_error.shelve"
+        call_count = 0
+
+        @cache(filename=cache_file, ignore=["extra"], always_bind=True)
+        def strict_func(a, b):
+            nonlocal call_count
+            call_count += 1
+            return a + b
+
+        # This should raise a TypeError when trying to bind
+        # extra arguments that the function doesn't accept
+        with pytest.raises(TypeError):
+            strict_func(1, 2, extra=99)  # Extra kwarg not in signature
+
+        # Should still cache properly for valid calls
+        result2 = strict_func(1, 2)
+        assert result2 == 3
+        assert call_count == 1  # Should hit cache
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

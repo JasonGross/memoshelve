@@ -137,10 +137,10 @@ class TestIntegration:
 
         # Second "session" - should load from disk
         @cache(filename=cache_file)
-        def compute(x):
+        def compute_session2(x):
             return "This should not be called"
 
-        result2 = compute(7)
+        result2 = compute_session2(7)
         assert result2 == 343  # Got old cached value
 
     @pytest.mark.asyncio
@@ -176,16 +176,22 @@ class TestPerformance:
         cache_file = temp_dir / "overhead.shelve"
         iterations = 1000
 
-        # Non-cached function (make it slightly more expensive)
+        # Non-cached function (make it more substantial to reduce relative overhead)
         def simple_func(x):
-            # Small computation to make caching overhead relatively smaller
-            return sum(range(x % 10 + 1))
+            # More substantial computation to make caching overhead relatively smaller
+            result = 0
+            for i in range(x % 20 + 10):  # 10-29 iterations
+                result += i**2 + i
+            return result
 
         # Cached version
         @cache(filename=cache_file)
         def cached_func(x):
-            # Small computation to make caching overhead relatively smaller
-            return sum(range(x % 10 + 1))
+            # More substantial computation to make caching overhead relatively smaller
+            result = 0
+            for i in range(x % 20 + 10):  # 10-29 iterations
+                result += i**2 + i
+            return result
 
         # Warm up cache
         for i in range(10):
@@ -203,9 +209,12 @@ class TestPerformance:
             cached_func(i % 10)
         cached_time = time.time() - start
 
-        # Cache should not add more than 100x overhead for simple functions
-        # This is generous given the overhead of hashing, memory lookups, copying, etc.
-        assert cached_time < uncached_time * 100
+        # Cache overhead should be reasonable for memory cache hits
+        # Since all calls are cache hits (memory lookup), overhead should be much lower
+        # Allow up to 50x overhead to account for hashing, memory lookups, copying, etc.
+        assert (
+            cached_time < uncached_time * 50
+        ), f"Cache overhead too high: {cached_time:.6f}s vs {uncached_time:.6f}s (ratio: {cached_time / uncached_time:.1f}x)"
 
     def test_memory_vs_disk_performance(self, temp_dir):
         """Compare memory cache vs disk cache performance."""
