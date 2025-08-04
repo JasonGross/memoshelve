@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 
 try:
     import dill
+
+    # monkeypatch shelve as per https://stackoverflow.com/q/52927236/377022
+    shelve.Pickler = dill.Pickler  # type: ignore
+    shelve.Unpickler = dill.Unpickler  # type: ignore
 except ImportError as e:
     logger.warning(
         f"Dill not found; some arguments may raise errors when passed to cached functions: {e}"
@@ -36,11 +40,6 @@ __all__ = [
     "DEFAULT_HASH",
     "__version__",
 ]
-
-if dill is not None:
-    # monkeypatch shelve as per https://stackoverflow.com/q/52927236/377022
-    shelve.Pickler = dill.Pickler  # type: ignore
-    shelve.Unpickler = dill.Unpickler  # type: ignore
 
 
 def hash_via_stablehash(obj: object) -> str:
