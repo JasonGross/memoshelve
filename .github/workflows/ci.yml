@@ -46,8 +46,8 @@ jobs:
 
     - run: uv venv
     - run: uv pip install -e .
-    - run: python -c "import memoshelve"
-    - run: pytest tests/ -v
+    - run: uv run -- python -c "import memoshelve"
+    - run: uv run -- pytest tests/ -v
 
   check-all:
     runs-on: ubuntu-latest
