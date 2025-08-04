@@ -45,10 +45,10 @@ jobs:
       run: uv build
 
     - name: Test package import
-      run: uv run --with memoshelve --no-project -- python -c "import memoshelve"
+      run: uv run --with memoshelve -- python -c "import memoshelve"
 
     - name: Run tests with pytest
-      run: uv run --with memoshelve[testing] --no-project -- pytest tests/ -v
+      run: uv run --with memoshelve[testing] -- pytest tests/ -v
 
   check-all:
     runs-on: ubuntu-latest
