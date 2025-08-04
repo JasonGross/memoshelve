@@ -51,6 +51,7 @@ __version__ = "0.1.0"
 
 memoshelve_cache: dict[str, dict[str, Any]] = {}
 T = TypeVar("T")
+V = TypeVar("V")
 
 DEFAULT_PRINT_MEM_CACHE_MISS = False
 DEFAULT_PRINT_MEM_CACHE_HIT = False
@@ -131,6 +132,59 @@ def compact(filename: Path | str, backup: bool = True):
         os.remove(backup_name)
 
 
+def upgrade(
+    filename: Path | str,
+    new_hash: Callable,
+    *,
+    backup: bool = True,
+    remove_backup_on_failure: bool = False,
+):
+    """Upgrade a shelve database by rehashing keys with a new hash function.
+
+    This function reads all entries from a shelve database, computes new keys using
+    the provided hash function based on stored args and kwargs, backs up the original
+    file (if requested), recreates the database with updated keys, and removes the
+    backup if successful. Entries without stored args/kwargs are skipped.
+
+    Args:
+        filename: Path to the shelve database file to upgrade
+        new_hash: The new hash function to use for generating keys
+        backup: Whether to create a backup before upgrading (default: True)
+
+    Raises:
+        UnpicklingError: Logged as warning for corrupted entries (entries are skipped)
+        Various IO errors: From file operations
+    """
+    filename = Path(filename)
+    with shelve.open(filename) as db:
+        old_entries = dict(db.items())
+
+    entries = {}
+    remove_backup = True
+    for k, stored in old_entries.items():
+        if isinstance(stored, tuple) and len(stored) == 3:
+            _result, args, kwargs = stored
+            new_key = str(new_hash((args, kwargs)))
+            entries[new_key] = stored
+        else:
+            remove_backup = remove_backup_on_failure
+            logger.warning(
+                f"Skipping non-upgradable entry {k} with value {stored} in {filename}"
+            )
+
+    if backup:
+        backup_name = backup_file(filename)
+    else:
+        backup_name = None
+        if filename.exists():
+            os.remove(filename)
+    with shelve.open(filename) as db:
+        for k, v in entries.items():
+            db[k] = v
+    if backup_name and remove_backup:
+        os.remove(backup_name)
+
+
 @contextmanager
 def lazy_shelve_open(filename: Path | str, *, eager: bool = False):
     """Context manager for lazy shelve database opening with retry logic.
@@ -192,7 +246,7 @@ class MemoshelveMetadata:
         get_hash: Callable,
         get_hash_mem: Callable,
         get_db: Callable,
-        mem_db: dict[str, Any],
+        mem_db: dict[str, tuple[Any, Any, Any]],
     ):
         self.filename = filename
         self.get_hash = get_hash
@@ -204,34 +258,65 @@ class MemoshelveMetadata:
         with self._get_db() as db:
             return set(db.keys())
 
-    def disk_items(self):
+    def disk_raw_items(self):
         with self._get_db() as db:
             return list(db.items())
 
-    def disk_values(self):
+    def disk_raw_values(self):
         with self._get_db() as db:
             return list(db.values())
 
-    def mem_keys(self):
-        return self._mem_db.keys()
+    def disk_items(self):
+        return [(k, v) for k, (v, _args, _kwargs) in self.disk_raw_items()]
 
-    def mem_items(self):
+    def disk_values(self):
+        return [v for v, _args, _kwargs in self.disk_raw_values()]
+
+    def mem_keys(self) -> set[str]:
+        return set(self._mem_db.keys())
+
+    def mem_raw_items(self):
         return self._mem_db.items()
 
-    def mem_values(self):
+    def mem_raw_values(self):
         return self._mem_db.values()
+
+    def mem_values(self):
+        return [v for v, _args, _kwargs in self.mem_raw_values()]
+
+    def mem_items(self):
+        return [(k, v) for k, (v, _args, _kwargs) in self.mem_raw_items()]
 
     def keys(self):
         return set(self.disk_keys()) | set(self.mem_keys())
 
+    def raw_items(self):
+        return (dict(self.disk_raw_items()) | self._mem_db).items()
+
+    def raw_values(self):
+        return (dict(self.disk_raw_values()) | self._mem_db).values()
+
     def items(self):
-        return (dict(self.disk_items()) | self._mem_db).items()
+        return (dict(self.disk_items()) | dict(self.mem_items())).items()
 
     def values(self):
-        return (dict(self.disk_items()) | self._mem_db).values()
+        return (dict(self.disk_items()) | dict(self.mem_items())).values()
 
     def compact(self, backup: bool = True):
         compact(self.filename, backup=backup)
+
+    def upgrade(
+        self,
+        new_hash: Callable,
+        backup: bool = True,
+        remove_backup_on_failure: bool = False,
+    ):
+        upgrade(
+            self.filename,
+            new_hash,
+            backup=backup,
+            remove_backup_on_failure=remove_backup_on_failure,
+        )
 
 
 class MemoCacheMetadata:
@@ -261,6 +346,20 @@ class MemoCacheMetadata:
             with self._f() as f:
                 return f.memoshelve.disk_keys()
 
+    def disk_raw_items(self):
+        if self.disabled:
+            return []
+        else:
+            with self._f() as f:
+                return f.memoshelve.disk_raw_items()
+
+    def disk_raw_values(self):
+        if self.disabled:
+            return []
+        else:
+            with self._f() as f:
+                return f.memoshelve.disk_raw_values()
+
     def disk_items(self):
         if self.disabled:
             return []
@@ -281,6 +380,20 @@ class MemoCacheMetadata:
         else:
             with self._f() as f:
                 return f.memoshelve.mem_keys()
+
+    def mem_raw_items(self):
+        if self.disabled:
+            return []
+        else:
+            with self._f() as f:
+                return f.memoshelve.mem_raw_items()
+
+    def mem_raw_values(self):
+        if self.disabled:
+            return []
+        else:
+            with self._f() as f:
+                return f.memoshelve.mem_raw_values()
 
     def mem_items(self):
         if self.disabled:
@@ -303,6 +416,20 @@ class MemoCacheMetadata:
             with self._f() as f:
                 return f.memoshelve.keys()
 
+    def raw_items(self):
+        if self.disabled:
+            return []
+        else:
+            with self._f() as f:
+                return f.memoshelve.raw_items()
+
+    def raw_values(self):
+        if self.disabled:
+            return []
+        else:
+            with self._f() as f:
+                return f.memoshelve.raw_values()
+
     def items(self):
         if self.disabled:
             return []
@@ -323,6 +450,19 @@ class MemoCacheMetadata:
         else:
             with self._f() as f:
                 f.memoshelve.compact(backup=backup)
+
+    def upgrade(
+        self,
+        new_hash: Callable,
+        backup: bool = True,
+        remove_backup_on_failure: bool = False,
+    ):
+        upgrade(
+            self.filename,
+            new_hash,
+            backup=backup,
+            remove_backup_on_failure=remove_backup_on_failure,
+        )
 
 
 class MemoCacheAsyncMetadata:
@@ -352,6 +492,20 @@ class MemoCacheAsyncMetadata:
             async with self._f() as f:
                 return f.memoshelve.disk_keys()
 
+    async def disk_raw_items(self):
+        if self.disabled:
+            return []
+        else:
+            async with self._f() as f:
+                return f.memoshelve.disk_raw_items()
+
+    async def disk_raw_values(self):
+        if self.disabled:
+            return []
+        else:
+            async with self._f() as f:
+                return f.memoshelve.disk_raw_values()
+
     async def disk_items(self):
         if self.disabled:
             return []
@@ -372,6 +526,20 @@ class MemoCacheAsyncMetadata:
         else:
             async with self._f() as f:
                 return f.memoshelve.mem_keys()
+
+    async def mem_raw_items(self):
+        if self.disabled:
+            return []
+        else:
+            async with self._f() as f:
+                return f.memoshelve.mem_raw_items()
+
+    async def mem_raw_values(self):
+        if self.disabled:
+            return []
+        else:
+            async with self._f() as f:
+                return f.memoshelve.mem_raw_values()
 
     async def mem_items(self):
         if self.disabled:
@@ -394,6 +562,20 @@ class MemoCacheAsyncMetadata:
             async with self._f() as f:
                 return f.memoshelve.keys()
 
+    async def raw_items(self):
+        if self.disabled:
+            return []
+        else:
+            async with self._f() as f:
+                return f.memoshelve.raw_items()
+
+    async def raw_values(self):
+        if self.disabled:
+            return []
+        else:
+            async with self._f() as f:
+                return f.memoshelve.raw_values()
+
     async def items(self):
         if self.disabled:
             return []
@@ -415,9 +597,25 @@ class MemoCacheAsyncMetadata:
             async with self._f() as f:
                 f.memoshelve.compact(backup=backup)
 
+    async def upgrade(
+        self,
+        new_hash: Callable,
+        backup: bool = True,
+        remove_backup_on_failure: bool = False,
+    ):
+        if self.disabled:
+            return
+        else:
+            async with self._f() as f:
+                f.memoshelve.upgrade(
+                    new_hash,
+                    backup=backup,
+                    remove_backup_on_failure=remove_backup_on_failure,
+                )
+
 
 def make_make_get_raw(
-    value: Callable,
+    value: Callable[..., T],
     filename: Path | str,
     cache: dict[str, dict[str, Any]] = memoshelve_cache,
     get_hash: Callable | None = None,
@@ -518,12 +716,22 @@ def make_make_get_raw(
         get_hash_mem = get_hash
 
     def make_get_raw(get_db):
-        def get_raw(*args, **kwargs):
+        def get_raw_tuple(
+            *args, **kwargs
+        ) -> (
+            tuple[
+                tuple[T, tuple, dict[str, Any]],
+                Literal["cached (mem)", "cached (disk)"],
+            ]
+            | tuple[tuple[tuple[str, str], tuple, dict[str, Any]], Literal["miss"]]
+        ):
             mkey = get_hash_mem((args, kwargs))
             try:
                 result = mem_db[mkey]
+                assert isinstance(result, tuple), result
+                result = (copy(result[0]), *result[1:])
                 print_mem_cache_hit(f"Cache hit (mem): {mkey}")
-                return copy(result), "cached (mem)"
+                return result, "cached (mem)"
             except KeyError:
                 print_mem_cache_miss(f"Cache miss (mem): {mkey}")
                 key = str(get_hash((args, kwargs)))
@@ -531,7 +739,10 @@ def make_make_get_raw(
                     with get_db() as db:
                         mem_db[mkey] = db[key]
                     print_disk_cache_hit(f"Cache hit (disk: {filename}): {key}")
-                    return copy(mem_db[mkey]), "cached (disk)"
+                    result = mem_db[mkey]
+                    assert isinstance(result, tuple), result
+                    result = (copy(result[0]), *result[1:])
+                    return result, "cached (disk)"
                 except Exception as e:
                     if isinstance(e, KeyError):
                         frames = traceback.extract_stack()
@@ -555,9 +766,18 @@ def make_make_get_raw(
                         logger.error(f"Error {e} in {filename} with key {key}")
                     if not isinstance(e, (KeyError, AttributeError, UnpicklingError)):
                         raise e
-                return (mkey, key), "miss"
+                return ((mkey, key), args, kwargs), "miss"
 
-        return get_raw
+        def get_raw(
+            *args, **kwargs
+        ) -> (
+            tuple[T, Literal["cached (mem)", "cached (disk)"]]
+            | tuple[tuple[str, str], Literal["miss"]]
+        ):
+            result, status = get_raw_tuple(*args, **kwargs)
+            return result[0], status  # type: ignore
+
+        return get_raw_tuple, get_raw
 
     return (
         filename,
@@ -661,7 +881,7 @@ def memoshelve(
     def open_db():
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
         with lazy_shelve_open(filename, eager=not allow_race) as get_db:
-            get_raw = make_get_raw(get_db)
+            _get_raw_tuple, get_raw = make_get_raw(get_db)
             metadata = make_metadata(get_db=get_db)
 
             def get(*args, **kwargs):
@@ -676,16 +896,17 @@ def memoshelve(
                 mkey = get_hash_mem((args, kwargs))
                 key = str(get_hash((args, kwargs)))
                 with get_db() as db:
-                    mem_db[mkey] = db[key] = value
+                    mem_db[mkey] = db[key] = (value, args, kwargs)
 
             def delegate_raw(*args, **kwargs):
                 result, status = get_raw(*args, **kwargs)
                 if status == "miss":
+                    assert isinstance(result, tuple), result
                     mkey, key = result
-                    mem_db[mkey] = copy(value(*args, **kwargs))
+                    mem_db[mkey] = (copy(value(*args, **kwargs)), args, kwargs)
                     with get_db() as db:
                         db[key] = mem_db[mkey]
-                    return mem_db[mkey], "miss"
+                    return mem_db[mkey][0], "miss"
                 else:
                     return result, status
 
@@ -791,7 +1012,7 @@ def async_memoshelve(
     async def open_db():
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
         with lazy_shelve_open(filename, eager=not allow_race) as get_db:
-            get_raw = make_get_raw(get_db)
+            _get_raw_tuple, get_raw = make_get_raw(get_db)
             metadata = make_metadata(get_db=get_db)
 
             def get(*args, **kwargs):
@@ -806,16 +1027,17 @@ def async_memoshelve(
                 mkey = get_hash_mem((args, kwargs))
                 key = str(get_hash((args, kwargs)))
                 with get_db() as db:
-                    mem_db[mkey] = db[key] = value
+                    mem_db[mkey] = db[key] = (value, args, kwargs)
 
             async def delegate_raw(*args, **kwargs):
                 result, status = get_raw(*args, **kwargs)
                 if status == "miss":
+                    assert isinstance(result, tuple), result
                     mkey, key = result
-                    mem_db[mkey] = copy(await value(*args, **kwargs))
+                    mem_db[mkey] = (copy(await value(*args, **kwargs)), args, kwargs)
                     with get_db() as db:
                         db[key] = mem_db[mkey]
-                    return mem_db[mkey], "miss"
+                    return mem_db[mkey][0], "miss"
                 else:
                     return result, status
 
