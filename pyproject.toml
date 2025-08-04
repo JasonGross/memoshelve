@@ -8,13 +8,16 @@ dependencies = []
 
 [project.optional-dependencies]
 robust = ["dill>=0.4.0", "stablehash>=0.2.3"]
-testing = [
-    "numpy>=2.3.2",
-    "pytest>=8.4.1",
-    "pytest-asyncio>=1.1.0",
-]
+testing = ["numpy>=2.3.2", "pytest>=8.4.1", "pytest-asyncio>=1.1.0"]
 dev = ["pre-commit>=4.2.0", "memoshelve[testing]"]
 all = ["memoshelve[robust,testing,dev]"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[project.urls]
+"Homepage" = "https://github.com/jxnl/memoshelve"
+"Bug Tracker" = "https://github.com/jxnl/memoshelve/issues"
 
 [[tool.uv.index]]
 name = "testpypi"
