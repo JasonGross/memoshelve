@@ -324,7 +324,10 @@ class TestErrorHandling:
                 func(6)
         finally:
             # Restore permissions for cleanup
-            cache_file.chmod(0o644)
+            try:
+                cache_file.chmod(0o644)
+            except FileNotFoundError:
+                pass
 
     def test_unicode_handling(self, temp_dir):
         """Test caching with unicode strings."""
