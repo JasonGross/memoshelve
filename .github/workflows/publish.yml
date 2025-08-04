@@ -46,7 +46,6 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: modified-files
-        path: modified-files.tar.gz
 
   publish-to-pypi:
     name: >-
@@ -71,7 +70,6 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: modified-files
-        path: modified-files.tar.gz
     - name: Extract the modified files
       run: tar -xzf modified-files.tar.gz
     - run: git --no-pager diff
