@@ -43,7 +43,9 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: python-package-modifications
-        path: __init__.py pyproject.toml
+        path: |
+          __init__.py
+          pyproject.toml
 
   publish-to-pypi:
     name: >-
