@@ -305,7 +305,7 @@ class TestCompaction:
 class TestErrorHandling:
     """Test error handling and recovery."""
 
-    @pytest.mark.xfail(reason="Permission handling may vary across platforms")
+    # @pytest.mark.xfail(reason="Permission handling may vary across platforms")
     def test_cache_file_permissions(self, temp_dir):
         """Test handling of permission errors."""
         cache_file = temp_dir / "readonly.shelve"
@@ -332,10 +332,10 @@ class TestErrorHandling:
                 func(6)
         finally:
             # Restore permissions for cleanup
-            try:
-                cache_file.chmod(0o644)
-            except FileNotFoundError:
-                pass
+            # try:
+            cache_file.chmod(0o644)
+            # except FileNotFoundError:
+            # pass
 
     def test_unicode_handling(self, temp_dir):
         """Test caching with unicode strings."""

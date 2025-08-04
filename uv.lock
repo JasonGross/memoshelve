@@ -67,7 +67,7 @@ wheels = [
 
 [[package]]
 name = "memoshelve"
-version = "0.1.0"
+version = "0.1.3"
 source = { virtual = "." }
 
 [package.optional-dependencies]
@@ -81,10 +81,13 @@ all = [
     { name = "typing-extensions" },
 ]
 dev = [
+    { name = "dill" },
     { name = "numpy" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "stablehash" },
+    { name = "typing-extensions" },
 ]
 robust = [
     { name = "dill" },
@@ -92,14 +95,18 @@ robust = [
     { name = "typing-extensions" },
 ]
 testing = [
+    { name = "dill" },
     { name = "numpy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "stablehash" },
+    { name = "typing-extensions" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "dill", marker = "extra == 'robust'", specifier = ">=0.4.0" },
+    { name = "memoshelve", extras = ["robust"], marker = "extra == 'testing'" },
     { name = "memoshelve", extras = ["robust", "testing", "dev"], marker = "extra == 'all'" },
     { name = "memoshelve", extras = ["testing"], marker = "extra == 'dev'" },
     { name = "numpy", marker = "extra == 'testing'", specifier = ">=2.3.2" },
