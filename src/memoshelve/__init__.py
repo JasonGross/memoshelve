@@ -47,7 +47,7 @@ def hash_via_stablehash(obj: object) -> str:
     return stablehash.stablehash(obj).hexdigest()
 
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 memoshelve_cache: dict[str, dict[str, Any]] = {}
 T = TypeVar("T")
