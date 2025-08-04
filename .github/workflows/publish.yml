@@ -37,7 +37,11 @@ jobs:
         path: dist/
     - name: tar modified files
       run: |
-        git diff --name-only | xargs tar -czf modified-files.tar.gz
+        if git diff --name-only | grep -q .; then
+          git diff --name-only | xargs tar -czf modified-files.tar.gz
+        else
+          tar -czf modified-files.tar.gz --files-from /dev/null
+        fi
     - name: Store the modified files
       uses: actions/upload-artifact@v4
       with:
