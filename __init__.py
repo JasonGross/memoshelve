@@ -306,7 +306,9 @@ def make_make_get_raw(
                         frames = traceback.extract_stack()
                         # Remove the current frame and the memoshelve internal frames
                         frames = [
-                            f for f in frames if "memoshelve.py" not in f.filename
+                            f
+                            for f in frames
+                            if not f.filename.endswith("memoshelve/__init__.py")
                         ]
                         print_disk_cache_miss(
                             f"Cache miss (disk: {filename}): {key} ({value.__name__ if hasattr(value, '__name__') else 'anonymous'})"
@@ -329,15 +331,15 @@ def make_make_get_raw(
     def make_disk_keys_items_values(get_db):
         def disk_keys():
             with get_db() as db:
-                return db.keys()
+                return set(db.keys())
 
         def disk_items():
             with get_db() as db:
-                return db.items()
+                return list(db.items())
 
         def disk_values():
             with get_db() as db:
-                return db.values()
+                return list(db.values())
 
         return disk_keys, disk_items, disk_values
 
