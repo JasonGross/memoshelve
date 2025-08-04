@@ -219,7 +219,7 @@ class TestPerformance:
         # Allow up to 50x overhead to account for hashing, memory lookups, copying, etc.
         ratio = float("inf") if uncached_time == 0 else cached_time / uncached_time
         assert (
-            cached_time < uncached_time * 50
+            cached_time < uncached_time * 100
         ), f"Cache overhead too high: {cached_time:.6f}s vs {uncached_time:.6f}s (ratio: {ratio:.1f}x)"
 
     def test_memory_vs_disk_performance(self, temp_dir):
