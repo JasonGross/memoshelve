@@ -44,9 +44,6 @@ jobs:
     - name: Test build
       run: uv build
 
-    - run: uv venv
-    - run: uv pip install -e .
-
     - name: Test package import
       run: uv run --with memoshelve -- python -c "import memoshelve"
 
