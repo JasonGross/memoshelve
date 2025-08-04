@@ -51,7 +51,7 @@ jobs:
       run: uv run --with memoshelve -- python -c "import memoshelve"
 
     - name: Run tests with pytest
-      run: uv run --with memoshelve[testing] -- pytest tests/ -v
+      run: uv run --with 'memoshelve[testing]' -- pytest tests/ -v
 
   check-all:
     runs-on: ubuntu-latest
