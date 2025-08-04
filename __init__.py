@@ -89,8 +89,8 @@ def backup_file(
             next_ext, strip_suffix = next_backup_ext(ext, strip_suffix=strip_suffix)
             backup_file(backup_name, ext=next_ext, strip_suffix=strip_suffix)
             assert not backup_name.exists()
-            filename.rename(backup_name)
-            return backup_name
+        filename.rename(backup_name)
+        return backup_name
     return None
 
 
