@@ -1,4 +1,8 @@
-import _gdbm
+try:
+    import _gdbm
+except ImportError:
+    _gdbm = None
+
 import inspect
 import logging
 import os
@@ -49,6 +53,11 @@ def hash_via_stablehash(obj: object) -> str:
 
 
 __version__ = "1.0.1"
+
+
+class _gdbm_dummy_error(Exception):
+    pass
+
 
 memoshelve_cache: dict[str, dict[str, Any]] = {}
 T = TypeVar("T")
@@ -1007,7 +1016,9 @@ def memoshelve(
                 try:
                     with get_db() as db:
                         db[key] = mem_db[mkey] = cache_value
-                except _gdbm.error as e:  # handle recovery
+                except getattr(
+                    _gdbm, "error", _gdbm_dummy_error
+                ) as e:  # handle recovery
                     if get_db.eager:
                         pending_compact = True
                         raise e
@@ -1169,7 +1180,9 @@ def async_memoshelve(
                 try:
                     with get_db() as db:
                         db[key] = mem_db[mkey] = cache_value
-                except _gdbm.error as e:  # handle recovery
+                except getattr(
+                    _gdbm, "error", _gdbm_dummy_error
+                ) as e:  # handle recovery
                     if get_db.eager:
                         pending_compact = True
                         raise e
