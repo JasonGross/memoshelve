@@ -1,3 +1,4 @@
+import _gdbm
 import inspect
 import logging
 import os
@@ -246,6 +247,7 @@ def lazy_shelve_open(filename: Path | str, *, eager: bool = False):
             def get_db():
                 yield db
 
+            get_db.eager = eager
             yield get_db
     else:
 
@@ -263,6 +265,7 @@ def lazy_shelve_open(filename: Path | str, *, eager: bool = False):
             with sh as db:
                 yield db
 
+        get_db.eager = eager
         yield get_db
 
 
@@ -975,6 +978,7 @@ def memoshelve(
     @contextmanager
     def open_db():
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
+        pending_compact = False
         with lazy_shelve_open(filename, eager=not allow_race) as get_db:
             _get_raw_dict, get_raw = make_get_raw(get_db)
             metadata = make_metadata(get_db=get_db)
@@ -988,18 +992,29 @@ def memoshelve(
                 return status != "miss"
 
             def put_raw_via_key(value, key, mkey, *args, **kwargs):
+                nonlocal pending_compact
                 cache_tuple = compute_cache_tuple(*args, **kwargs)
                 if mkey is None:
                     mkey = get_hash_mem(cache_tuple)
                 if key is None:
                     key = str(get_hash(cache_tuple))
-                with get_db() as db:
-                    db[key] = mem_db[mkey] = {
-                        "result": value,
-                        "version": __version__,
-                        "args": cache_tuple[0],
-                        "kwargs": cache_tuple[1],
-                    }
+                cache_value = {
+                    "result": value,
+                    "version": __version__,
+                    "args": cache_tuple[0],
+                    "kwargs": cache_tuple[1],
+                }
+                try:
+                    with get_db() as db:
+                        db[key] = mem_db[mkey] = cache_value
+                except _gdbm.error as e:  # handle recovery
+                    if get_db.eager:
+                        pending_compact = True
+                        raise e
+                    else:
+                        compact(filename)
+                        with get_db() as db:
+                            db[key] = mem_db[mkey] = cache_value
                 return mem_db[mkey]["result"]
 
             def put(value, *args, **kwargs):
@@ -1125,6 +1140,7 @@ def async_memoshelve(
     @asynccontextmanager
     async def open_db():
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
+        pending_compact = False
         with lazy_shelve_open(filename, eager=not allow_race) as get_db:
             _get_raw_dict, get_raw = make_get_raw(get_db)
             metadata = make_metadata(get_db=get_db)
@@ -1138,18 +1154,29 @@ def async_memoshelve(
                 return status != "miss"
 
             def put_raw_via_key(value, key, mkey, *args, **kwargs):
+                nonlocal pending_compact
                 cache_tuple = compute_cache_tuple(*args, **kwargs)
                 if mkey is None:
                     mkey = get_hash_mem(cache_tuple)
                 if key is None:
                     key = str(get_hash(cache_tuple))
-                with get_db() as db:
-                    db[key] = mem_db[mkey] = {
-                        "result": value,
-                        "version": __version__,
-                        "args": cache_tuple[0],
-                        "kwargs": cache_tuple[1],
-                    }
+                cache_value = {
+                    "result": value,
+                    "version": __version__,
+                    "args": cache_tuple[0],
+                    "kwargs": cache_tuple[1],
+                }
+                try:
+                    with get_db() as db:
+                        db[key] = mem_db[mkey] = cache_value
+                except _gdbm.error as e:  # handle recovery
+                    if get_db.eager:
+                        pending_compact = True
+                        raise e
+                    else:
+                        compact(filename)
+                        with get_db() as db:
+                            db[key] = mem_db[mkey] = cache_value
                 return mem_db[mkey]["result"]
 
             def put(value, *args, **kwargs):
