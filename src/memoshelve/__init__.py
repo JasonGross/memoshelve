@@ -1020,9 +1020,15 @@ def memoshelve(
                     _gdbm, "error", _gdbm_dummy_error
                 ) as e:  # handle recovery
                     if get_db.eager:
+                        logging.error(
+                            f"Error writing to {filename}, queueing compact: {e}"
+                        )
                         pending_compact = True
                         raise e
                     else:
+                        logging.warning(
+                            f"Error writing to {filename}, attempting compact: {e}"
+                        )
                         compact(filename)
                         with get_db() as db:
                             db[key] = mem_db[mkey] = cache_value
@@ -1184,9 +1190,15 @@ def async_memoshelve(
                     _gdbm, "error", _gdbm_dummy_error
                 ) as e:  # handle recovery
                     if get_db.eager:
+                        logging.error(
+                            f"Error writing to {filename}, queueing compact: {e}"
+                        )
                         pending_compact = True
                         raise e
                     else:
+                        logging.warning(
+                            f"Error writing to {filename}, attempting compact: {e}"
+                        )
                         compact(filename)
                         with get_db() as db:
                             db[key] = mem_db[mkey] = cache_value
