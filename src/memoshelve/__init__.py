@@ -270,6 +270,10 @@ def lazy_shelve_open(filename: Path | str, *, eager: bool = False):
                     if e.args == (11, "Resource temporarily unavailable"):
                         time.sleep(0.1)
                     else:
+                        if len(e.args) == 1 and isinstance(e.args[0], str):
+                            e.args = (e.args[0] + f" ({filename})",)
+                        else:
+                            e.args = (*e.args, filename)
                         raise e
             with sh as db:
                 yield db
