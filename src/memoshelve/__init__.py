@@ -106,7 +106,9 @@ def backup_file(
     return None
 
 
-def compact(filename: Path | str, backup: bool = True):
+def compact(
+    filename: Path | str, backup: bool = True, *, remove_on_unknown_type: bool = False
+):
     """Compact a shelve database by removing corrupted entries.
 
     This function reads all entries from a shelve database, backs up the original
@@ -121,13 +123,27 @@ def compact(filename: Path | str, backup: bool = True):
         UnpicklingError: Logged as warning for corrupted entries (entries are skipped)
         Various IO errors: From file operations
     """
+    save_backup = False
     entries = {}
-    with shelve.open(filename) as db:
-        for k in db.keys():
-            try:
-                entries[k] = db[k]
-            except UnpicklingError:
-                logger.warning(f"UnpicklingError for {k} in {filename}")
+    try:
+        with shelve.open(filename) as db:
+            for k in db.keys():
+                try:
+                    entries[k] = db[k]
+                except UnpicklingError:
+                    logger.warning(f"UnpicklingError for {k} in {filename}")
+    except getattr(_gdbm, "error", _gdbm_dummy_error) as e:  # handle recovery
+        if not (
+            e.args
+            and e.args[0] == "db type could not be determined"
+            and remove_on_unknown_type
+        ):
+            raise e
+        backup = True
+        save_backup = True
+        logger.warning(
+            f"DB type could not be determined ({e}), removing {filename} and creating a new one"
+        )
     if backup:
         backup_name = backup_file(filename)
     else:
@@ -136,7 +152,7 @@ def compact(filename: Path | str, backup: bool = True):
     with shelve.open(filename) as db:
         for k in entries.keys():
             db[k] = entries[k]
-    if backup_name:
+    if backup_name and not save_backup:
         assert backup_name != filename, backup_name
         os.remove(backup_name)
 
@@ -1033,7 +1049,7 @@ def memoshelve(
                         logging.warning(
                             f"Error writing to {filename}, attempting compact: {e}"
                         )
-                        compact(filename)
+                        compact(filename, remove_on_unknown_type=True)
                         with get_db() as db:
                             db[key] = mem_db[mkey] = cache_value
                 return mem_db[mkey]["result"]
@@ -1065,6 +1081,10 @@ def memoshelve(
             delegate.memoshelve = metadata
 
             yield delegate
+
+            if pending_compact:
+                logging.warning(f"Compacting {filename} after use due to error")
+                compact(filename, remove_on_unknown_type=True)
 
     return open_db
 
