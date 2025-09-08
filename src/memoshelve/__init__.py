@@ -9,6 +9,7 @@ import os
 import shelve
 import time
 import traceback
+import dbm
 from contextlib import asynccontextmanager, contextmanager
 from functools import partial, wraps
 from pathlib import Path
@@ -132,10 +133,17 @@ def compact(
                     entries[k] = db[k]
                 except UnpicklingError:
                     logger.warning(f"UnpicklingError for {k} in {filename}")
-    except getattr(_gdbm, "error", _gdbm_dummy_error) as e:  # handle recovery
+    except Exception as e:
+        _gdbm_error = getattr(_gdbm, "error", _gdbm_dummy_error)
+        if not (
+            isinstance(e, _gdbm_error) or isinstance(e, dbm.error)
+        ):  # handle recovery
+            raise e
         if not (
             e.args
-            and e.args[0] == "db type could not be determined"
+            and isinstance(e.args, tuple)
+            and isinstance(e.args[0], str)
+            and e.args[0].startswith("db type could not be determined")
             and remove_on_unknown_type
         ):
             raise e
@@ -834,6 +842,8 @@ def make_make_get_raw(
     )
 
     def make_get_raw(get_db):
+        _gdbm_error = getattr(_gdbm, "error", _gdbm_dummy_error)
+
         def get_raw_dict(
             *args, **kwargs
         ) -> tuple[dict, Literal["cached (mem)", "cached (disk)", "miss"]]:
@@ -875,9 +885,31 @@ def make_make_get_raw(
                         )
                     elif isinstance(e, (KeyboardInterrupt, SystemExit)):
                         raise e
+                    elif isinstance(e, _gdbm_error) or isinstance(e, dbm.error):
+                        # handle recovery
+                        if get_db.eager:
+                            logging.error(
+                                f"Error reading from {filename}, queueing compact: {e}"
+                            )
+                            get_db.pending_compact = True
+                            raise e
+                        else:
+                            logging.warning(
+                                f"Error reading from {filename}, attempting compact: {e}"
+                            )
+                            compact(filename, remove_on_unknown_type=True)
                     else:
                         logger.error(f"Error {e} in {filename} with key {key}")
-                    if not isinstance(e, (KeyError, AttributeError, UnpicklingError)):
+                    if not isinstance(
+                        e,
+                        (
+                            KeyError,
+                            AttributeError,
+                            UnpicklingError,
+                            _gdbm_error,
+                            dbm.error,
+                        ),
+                    ):
                         raise e
                 return {
                     "result": (mkey, key),
@@ -1007,8 +1039,8 @@ def memoshelve(
     @contextmanager
     def open_db():
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
-        pending_compact = False
         with lazy_shelve_open(filename, eager=not allow_race) as get_db:
+            get_db.pending_compact = False
             _get_raw_dict, get_raw = make_get_raw(get_db)
             metadata = make_metadata(get_db=get_db)
 
@@ -1021,7 +1053,6 @@ def memoshelve(
                 return status != "miss"
 
             def put_raw_via_key(value, key, mkey, *args, **kwargs):
-                nonlocal pending_compact
                 cache_tuple = compute_cache_tuple(*args, **kwargs)
                 if mkey is None:
                     mkey = get_hash_mem(cache_tuple)
@@ -1036,14 +1067,13 @@ def memoshelve(
                 try:
                     with get_db() as db:
                         db[key] = mem_db[mkey] = cache_value
-                except getattr(
-                    _gdbm, "error", _gdbm_dummy_error
-                ) as e:  # handle recovery
+                except (getattr(_gdbm, "error", _gdbm_dummy_error), dbm.error) as e:
+                    # handle recovery
                     if get_db.eager:
                         logging.error(
                             f"Error writing to {filename}, queueing compact: {e}"
                         )
-                        pending_compact = True
+                        get_db.pending_compact = True
                         raise e
                     else:
                         logging.warning(
@@ -1082,7 +1112,7 @@ def memoshelve(
 
             yield delegate
 
-            if pending_compact:
+            if get_db.pending_compact:
                 logging.warning(f"Compacting {filename} after use due to error")
                 compact(filename, remove_on_unknown_type=True)
 
@@ -1181,8 +1211,8 @@ def async_memoshelve(
     @asynccontextmanager
     async def open_db():
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
-        pending_compact = False
         with lazy_shelve_open(filename, eager=not allow_race) as get_db:
+            get_db.pending_compact = False
             _get_raw_dict, get_raw = make_get_raw(get_db)
             metadata = make_metadata(get_db=get_db)
 
@@ -1195,7 +1225,6 @@ def async_memoshelve(
                 return status != "miss"
 
             def put_raw_via_key(value, key, mkey, *args, **kwargs):
-                nonlocal pending_compact
                 cache_tuple = compute_cache_tuple(*args, **kwargs)
                 if mkey is None:
                     mkey = get_hash_mem(cache_tuple)
@@ -1217,13 +1246,13 @@ def async_memoshelve(
                         logging.error(
                             f"Error writing to {filename}, queueing compact: {e}"
                         )
-                        pending_compact = True
+                        get_db.pending_compact = True
                         raise e
                     else:
                         logging.warning(
                             f"Error writing to {filename}, attempting compact: {e}"
                         )
-                        compact(filename)
+                        compact(filename, remove_on_unknown_type=True)
                         with get_db() as db:
                             db[key] = mem_db[mkey] = cache_value
                 return mem_db[mkey]["result"]
@@ -1255,6 +1284,10 @@ def async_memoshelve(
             delegate.memoshelve = metadata
 
             yield delegate
+
+            if get_db.pending_compact:
+                logging.warning(f"Compacting {filename} after use due to error")
+                compact(filename, remove_on_unknown_type=True)
 
     return open_db
 
