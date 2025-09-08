@@ -52,7 +52,7 @@ def hash_via_stablehash(obj: object) -> str:
     return stablehash.stablehash(obj).hexdigest()
 
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 
 
 class _gdbm_dummy_error(Exception):
