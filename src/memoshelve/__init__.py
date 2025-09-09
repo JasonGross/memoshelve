@@ -1039,6 +1039,7 @@ def memoshelve(
     @contextmanager
     def open_db():
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
+        _gdbm_error = getattr(_gdbm, "error", _gdbm_dummy_error)
         with lazy_shelve_open(filename, eager=not allow_race) as get_db:
             get_db.pending_compact = False
             _get_raw_dict, get_raw = make_get_raw(get_db)
@@ -1067,7 +1068,9 @@ def memoshelve(
                 try:
                     with get_db() as db:
                         db[key] = mem_db[mkey] = cache_value
-                except (getattr(_gdbm, "error", _gdbm_dummy_error), dbm.error) as e:
+                except Exception as e:
+                    if not (isinstance(e, _gdbm_error) or isinstance(e, dbm.error)):
+                        raise e
                     # handle recovery
                     if get_db.eager:
                         logging.error(
@@ -1211,6 +1214,7 @@ def async_memoshelve(
     @asynccontextmanager
     async def open_db():
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
+        _gdbm_error = getattr(_gdbm, "error", _gdbm_dummy_error)
         with lazy_shelve_open(filename, eager=not allow_race) as get_db:
             get_db.pending_compact = False
             _get_raw_dict, get_raw = make_get_raw(get_db)
@@ -1239,9 +1243,10 @@ def async_memoshelve(
                 try:
                     with get_db() as db:
                         db[key] = mem_db[mkey] = cache_value
-                except getattr(
-                    _gdbm, "error", _gdbm_dummy_error
-                ) as e:  # handle recovery
+                except Exception as e:
+                    # handle recovery
+                    if not (isinstance(e, _gdbm_error) or isinstance(e, dbm.error)):
+                        raise e
                     if get_db.eager:
                         logging.error(
                             f"Error writing to {filename}, queueing compact: {e}"
