@@ -18,7 +18,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
     - name: Install uv
-      uses: astral-sh/setup-uv@v6
+      uses: astral-sh/setup-uv@v7
       with:
         version: "latest"
     - name: Bump package version with local extension
@@ -76,7 +76,7 @@ jobs:
       run: tar -xzf modified-files.tar.gz
     - run: git --no-pager diff
     - name: Install uv
-      uses: astral-sh/setup-uv@v6
+      uses: astral-sh/setup-uv@v7
       with:
         version: "latest"
     - name: Publish distribution 📦 to PyPI
@@ -112,7 +112,7 @@ jobs:
       run: tar -xzf modified-files.tar.gz
     - run: git --no-pager diff
     - name: Install uv
-      uses: astral-sh/setup-uv@v6
+      uses: astral-sh/setup-uv@v7
       with:
         version: "latest"
     - name: Publish distribution 📦 to TestPyPI
@@ -169,7 +169,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
     - name: Install uv
-      uses: astral-sh/setup-uv@v6
+      uses: astral-sh/setup-uv@v7
     - name: Bump Package version
       id: bumpPackageViaPush
       run: |
