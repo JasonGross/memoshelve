@@ -3,6 +3,7 @@ try:
 except ImportError:
     _gdbm = None
 
+from copy import deepcopy
 import inspect
 import logging
 import os
@@ -73,6 +74,20 @@ DEFAULT_CACHE_DIR = (
     Path(os.getenv("XDG_CACHE_HOME", Path.home() / ".cache")) / "memoshelve"
 )
 DEFAULT_HASH = hash_via_stablehash if stablehash is not None else repr  # type: ignore
+DEFAULT_PRINT_VALIDATE_ERROR = True
+DEFAULT_PRINT_VALIDATE_ERROR_FN = logger.warning
+
+
+def default_validate_fn(value: Any) -> bool | None:
+    if hasattr(value, "__validate__"):
+        return value.__validate__()
+    if isinstance(value, (tuple, list)):
+        return all(default_validate_fn(v) is not False for v in value)
+    elif isinstance(value, dict):
+        return all(default_validate_fn((k, v)) is not False for k, v in value.items())
+
+
+DEFAULT_VALIDATE_FN = default_validate_fn
 
 
 def next_backup_ext(ext: str, strip_suffix: bool | None = None) -> tuple[str, bool]:
@@ -107,8 +122,43 @@ def backup_file(
     return None
 
 
+def validate_value_or_raise_and_warn(
+    value: Any,
+    *,
+    validate: bool | None | Callable[[Any], bool | None],
+    key: str,
+    filename: Path | str,
+    warn_fn: Callable[[str], None] = logger.warning,
+    exn: Exception = KeyError(),
+):
+    if validate is True:
+        validate = DEFAULT_VALIDATE_FN
+    elif validate is False or validate is None:
+        return True
+
+    try:
+        if validate(value) is not False:
+            return
+        warn_fn(f"Invalid value {value} for key {key} in {filename}")
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:
+        warn_fn(f"Error validating key {key} in {filename}: {e}")
+        exn = deepcopy(exn)
+        exn.args = exn.args + (key, filename, value, e)
+        raise exn from e
+    exn = deepcopy(exn)
+    exn.args = exn.args + (key, filename, value)
+    raise exn
+
+
 def compact(
-    filename: Path | str, backup: bool = True, *, remove_on_unknown_type: bool = False
+    filename: Path | str,
+    backup: bool = True,
+    *,
+    remove_on_unknown_type: bool = False,
+    validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
+    validate_warn: Callable[[str], None] = DEFAULT_PRINT_VALIDATE_ERROR_FN,
 ):
     """Compact a shelve database by removing corrupted entries.
 
@@ -152,6 +202,19 @@ def compact(
         logger.warning(
             f"DB type could not be determined ({e}), removing {filename} and creating a new one"
         )
+    if validate is not None and validate is not False:
+        for k, v in list(entries.items()):
+            try:
+                validate_value_or_raise_and_warn(
+                    v,
+                    validate=validate,
+                    key=k,
+                    filename=filename,
+                    exn=KeyError(),
+                    warn_fn=validate_warn,
+                )
+            except KeyError:
+                del entries[k]
     if backup:
         backup_name = backup_file(filename)
     else:
@@ -185,9 +248,25 @@ def upgrade_value(value: Any) -> Optional[dict]:
         return None
 
 
-def upgrade_value_or_raise(value: Any, exn: Exception = KeyError()) -> dict[str, Any]:
+def upgrade_value_or_raise(
+    value: Any,
+    exn: Exception = KeyError(),
+    *,
+    validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
+    validate_warn: Callable[[str], None] = DEFAULT_PRINT_VALIDATE_ERROR_FN,
+    key: str,
+    filename: Path | str,
+) -> dict[str, Any]:
     new_value = upgrade_value(value)
     if new_value is not None:
+        validate_value_or_raise_and_warn(
+            new_value["result"],
+            validate=validate,
+            key=key,
+            filename=filename,
+            warn_fn=validate_warn,
+            exn=exn,
+        )
         return new_value
     else:
         raise exn
@@ -373,8 +452,12 @@ class MemoshelveMetadata:
     def values(self):
         return (dict(self.disk_items()) | dict(self.mem_items())).values()
 
-    def compact(self, backup: bool = True):
-        compact(self.filename, backup=backup)
+    def compact(
+        self,
+        backup: bool = True,
+        validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
+    ):
+        compact(self.filename, backup=backup, validate=validate)
 
     def upgrade(
         self,
@@ -515,12 +598,16 @@ class MemoCacheMetadata:
             with self._f() as f:
                 return f.memoshelve.values()
 
-    def compact(self, backup: bool = True):
+    def compact(
+        self,
+        backup: bool = True,
+        validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
+    ):
         if self.disabled:
             return
         else:
             with self._f() as f:
-                f.memoshelve.compact(backup=backup)
+                f.memoshelve.compact(backup=backup, validate=validate)
 
     def upgrade(
         self,
@@ -662,12 +749,16 @@ class MemoCacheAsyncMetadata:
             async with self._f() as f:
                 return f.memoshelve.values()
 
-    async def compact(self, backup: bool = True):
+    async def compact(
+        self,
+        backup: bool = True,
+        validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
+    ):
         if self.disabled:
             return
         else:
             async with self._f() as f:
-                f.memoshelve.compact(backup=backup)
+                f.memoshelve.compact(backup=backup, validate=validate)
 
     async def upgrade(
         self,
@@ -751,6 +842,9 @@ def make_make_get_raw(
     allow_race: bool = True,
     ignore: Collection[str] = (),
     always_bind: bool = False,
+    validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
+    print_validate_error: bool | None = None,
+    validate_warn: bool | Callable[[str], None] = logger.warning,
 ):
     """Create a memoized version of a function using shelve + in-memory cache.
 
@@ -772,6 +866,10 @@ def make_make_get_raw(
         print_extended_cache_miss_disk: Include extended traceback info in disk cache miss logs
         copy: Function to copy cached values (default: identity function)
         allow_race: Allow race conditions in cache updates (default: True)
+        ignore: Collection of argument names to ignore in cache key computation
+        always_bind: Always bind arguments to the function signature for cache key computation (default: False)
+        validate: Function to validate cached values (default: DEFAULT_VALIDATE_FN)
+        validate_warn: Function to warn about invalid values (default: logger.warning)
 
     Returns:
         A context manager that yields a memoized function with additional methods:
@@ -829,6 +927,12 @@ def make_make_get_raw(
         DEFAULT_PRINT_DISK_CACHE_HIT,
         DEFAULT_PRINT_CACHE_HIT_FN,
     )
+    validate_warn = set_print_fn(
+        validate_warn,
+        print_validate_error,
+        DEFAULT_PRINT_VALIDATE_ERROR,
+        DEFAULT_PRINT_VALIDATE_ERROR_FN,
+    )
 
     filename = str(Path(filename).absolute())
     mem_db: dict[str, dict[str, Any]] = cache.setdefault(filename, {})
@@ -852,6 +956,13 @@ def make_make_get_raw(
             try:
                 result = mem_db[mkey]
                 assert isinstance(result, dict), result
+                validate_value_or_raise_and_warn(
+                    result["result"],
+                    validate=validate,
+                    key=mkey,
+                    filename="(mem)",
+                    warn_fn=validate_warn,
+                )
                 result = copy_result(copy, **result)
                 print_mem_cache_hit(f"Cache hit (mem): {mkey}")
                 return result, "cached (mem)"
@@ -860,7 +971,13 @@ def make_make_get_raw(
                 key = str(get_hash(cache_tuple))
                 try:
                     with get_db() as db:
-                        mem_db[mkey] = upgrade_value_or_raise(db[key])
+                        mem_db[mkey] = upgrade_value_or_raise(
+                            db[key],
+                            key=key,
+                            filename=filename,
+                            validate=validate,
+                            validate_warn=validate_warn,
+                        )
                     print_disk_cache_hit(f"Cache hit (disk: {filename}): {key}")
                     result = mem_db[mkey]
                     assert isinstance(result, dict), result
@@ -964,6 +1081,9 @@ def memoshelve(
     allow_race: bool = True,
     ignore: Collection[str] = (),
     always_bind: bool = False,
+    validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
+    validate_warn: Callable[[str], None] = logger.warning,
+    print_validate_error: bool | None = None,
 ):
     """Create a memoized version of a function using shelve + in-memory cache.
 
@@ -987,6 +1107,9 @@ def memoshelve(
         allow_race: Allow race conditions in cache updates (default: True)
         ignore: Collection of argument names to ignore in cache key computation
         always_bind: Always bind arguments to the function signature for cache key computation (default: False)
+        validate: Function to validate cached values (default: DEFAULT_VALIDATE_FN)
+        validate_warn: Function to warn about invalid values (default: logger.warning)
+        print_validate_error: Print validate error messages (default: None)
 
     Returns:
         A context manager that yields a memoized function with additional methods:
@@ -1029,6 +1152,9 @@ def memoshelve(
         allow_race=allow_race,
         ignore=ignore,
         always_bind=always_bind,
+        validate=validate,
+        validate_warn=validate_warn,
+        print_validate_error=print_validate_error,
     )
 
     # filename = str(Path(filename).absolute())
@@ -1082,7 +1208,12 @@ def memoshelve(
                         logging.warning(
                             f"Error writing to {filename}, attempting compact: {e}"
                         )
-                        compact(filename, remove_on_unknown_type=True)
+                        compact(
+                            filename,
+                            remove_on_unknown_type=True,
+                            validate=validate,
+                            validate_warn=validate_warn,
+                        )
                         with get_db() as db:
                             db[key] = mem_db[mkey] = cache_value
                 return mem_db[mkey]["result"]
@@ -1117,7 +1248,12 @@ def memoshelve(
 
             if get_db.pending_compact:
                 logging.warning(f"Compacting {filename} after use due to error")
-                compact(filename, remove_on_unknown_type=True)
+                compact(
+                    filename,
+                    remove_on_unknown_type=True,
+                    validate=validate,
+                    validate_warn=validate_warn,
+                )
 
     return open_db
 
@@ -1139,6 +1275,9 @@ def async_memoshelve(
     allow_race: bool = True,
     ignore: Collection[str] = (),
     always_bind: bool = False,
+    validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
+    validate_warn: Callable[[str], None] = DEFAULT_PRINT_VALIDATE_ERROR_FN,
+    print_validate_error: bool | None = None,
 ):
     """Create a memoized version of a function using shelve + in-memory cache.
 
@@ -1162,6 +1301,9 @@ def async_memoshelve(
         allow_race: Allow race conditions in cache updates (default: True)
         ignore: Collection of argument names to ignore in cache key computation
         always_bind: Always bind arguments to the function signature for cache key computation (default: False)
+        validate: Function to validate cached values (default: DEFAULT_VALIDATE_FN)
+        validate_warn: Function to warn about invalid values (default: logger.warning)
+        print_validate_error: Print validate error messages (default: None)
 
     Returns:
         A context manager that yields a memoized function with additional methods:
@@ -1204,6 +1346,9 @@ def async_memoshelve(
         allow_race=allow_race,
         ignore=ignore,
         always_bind=always_bind,
+        validate=validate,
+        validate_warn=validate_warn,
+        print_validate_error=print_validate_error,
     )
 
     # filename = str(Path(filename).absolute())
@@ -1257,7 +1402,12 @@ def async_memoshelve(
                         logging.warning(
                             f"Error writing to {filename}, attempting compact: {e}"
                         )
-                        compact(filename, remove_on_unknown_type=True)
+                        compact(
+                            filename,
+                            remove_on_unknown_type=True,
+                            validate=validate,
+                            validate_warn=validate_warn,
+                        )
                         with get_db() as db:
                             db[key] = mem_db[mkey] = cache_value
                 return mem_db[mkey]["result"]
@@ -1366,6 +1516,9 @@ def sync_cache(
     allow_race: bool = True,
     ignore: Collection[str] = (),
     always_bind: bool = False,
+    validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
+    validate_warn: Callable[[str], None] = DEFAULT_PRINT_VALIDATE_ERROR_FN,
+    print_validate_error: bool | None = None,
 ):
     """Decorator for memoizing functions with two-tier caching (memory + disk).
 
@@ -1390,6 +1543,9 @@ def sync_cache(
         allow_race: Allow race conditions in cache updates (default: True)
         ignore: Collection of argument names to ignore in cache key computation
         always_bind: Always bind arguments to the function signature for cache key computation (default: False)
+        validate: Function to validate cached values (default: DEFAULT_VALIDATE_FN)
+        validate_warn: Function to warn about invalid values (default: logger.warning)
+        print_validate_error: Print validate error messages (default: None)
 
     Returns:
         A decorator function that wraps the target function with caching capabilities.
@@ -1446,6 +1602,9 @@ def sync_cache(
             allow_race=allow_race,
             ignore=ignore,
             always_bind=always_bind,
+            validate=validate,
+            validate_warn=validate_warn,
+            print_validate_error=print_validate_error,
         )
         if disable:
 
@@ -1532,6 +1691,9 @@ def async_cache(
     allow_race: bool = True,
     ignore: Collection[str] = (),
     always_bind: bool = False,
+    validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
+    validate_warn: Callable[[str], None] = DEFAULT_PRINT_VALIDATE_ERROR_FN,
+    print_validate_error: bool | None = None,
 ):
     """Decorator for memoizing async functions with two-tier caching (memory + disk).
 
@@ -1563,6 +1725,9 @@ def async_cache(
             allow_race=allow_race,
             ignore=ignore,
             always_bind=always_bind,
+            validate=validate,
+            validate_warn=validate_warn,
+            print_validate_error=print_validate_error,
         )
         if disable:
 
@@ -1649,6 +1814,9 @@ def cache(
     allow_race: bool = True,
     ignore: Collection[str] = (),
     always_bind: bool = False,
+    validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
+    validate_warn: Callable[[str], None] = DEFAULT_PRINT_VALIDATE_ERROR_FN,
+    print_validate_error: bool | None = None,
 ):
     """Decorator for memoizing functions with two-tier caching, choosing sync or async based on the function type."""
 
@@ -1671,6 +1839,9 @@ def cache(
                 allow_race=allow_race,
                 ignore=ignore,
                 always_bind=always_bind,
+                validate=validate,
+                validate_warn=validate_warn,
+                print_validate_error=print_validate_error,
             )(func)
         else:
             return sync_cache(
@@ -1690,6 +1861,9 @@ def cache(
                 allow_race=allow_race,
                 ignore=ignore,
                 always_bind=always_bind,
+                validate=validate,
+                validate_warn=validate_warn,
+                print_validate_error=print_validate_error,
             )(func)
 
     return decorator
