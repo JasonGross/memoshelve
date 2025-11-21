@@ -1,7 +1,7 @@
 [project]
 name = "memoshelve"
 version = "1.0.6"
-description = "Add your description here"
+description = "A persistent memoization decorator using Python's shelve with two-tier caching (memory + disk)."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
@@ -22,8 +22,8 @@ all = ["memoshelve[robust,testing,dev]"]
 package-dir = { "" = "src" }
 
 [project.urls]
-"Homepage" = "https://github.com/jxnl/memoshelve"
-"Bug Tracker" = "https://github.com/jxnl/memoshelve/issues"
+"Homepage" = "https://github.com/JasonGross/memoshelve"
+"Bug Tracker" = "https://github.com/JasonGross/memoshelve/issues"
 
 [[tool.uv.index]]
 name = "testpypi"
