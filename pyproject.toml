@@ -1,6 +1,6 @@
 [project]
 name = "memoshelve"
-version = "1.0.6"
+version = "1.0.7"
 description = "A persistent memoization decorator using Python's shelve with two-tier caching (memory + disk)."
 readme = "README.md"
 requires-python = ">=3.11"

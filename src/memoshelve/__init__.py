@@ -55,7 +55,7 @@ def hash_via_stablehash(obj: object) -> str:
     return stablehash.stablehash(obj).hexdigest()
 
 
-__version__ = "1.0.6"
+__version__ = "1.0.7"
 
 
 class _gdbm_dummy_error(Exception):
