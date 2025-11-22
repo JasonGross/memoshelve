@@ -16,6 +16,7 @@ from functools import partial, wraps
 from pathlib import Path
 from pickle import UnpicklingError
 from typing import Any, Callable, Collection, Literal, Optional, TypeVar
+from .inspect_extra import get_function_source
 
 logger = logging.getLogger(__name__)
 
@@ -782,40 +783,73 @@ def make_compute_cache_tuple(
     value: Callable[..., T] | None,
     ignore: Collection[str],
     always_bind: bool,
-) -> Callable[..., tuple[tuple, dict[str, Any]]]:
+    invalidate_on_source_change: bool | Literal["recursively"] = False,
+) -> Callable[..., tuple[tuple, dict[str, Any]] | tuple[tuple, dict[str, Any], str]]:
     sig = inspect.signature(value or (lambda *_args, **_kwargs: None))
 
-    def compute_cache_tuple(*args, **kwargs) -> tuple[tuple, dict[str, Any]]:
-        if not always_bind and not ignore:
-            return (args, kwargs)
-        assert (
-            value is not None
-        ), "value must be provided if always_bind is True or ignore is not empty"
+    # Compute source hash once if needed
+    source_hash = None
+    if invalidate_on_source_change and value is not None:
         try:
-            bound = sig.bind(*args, **kwargs)
-            bound.apply_defaults()
-        except TypeError as e:
-            if always_bind:
-                # For always_bind, try partial binding and apply defaults
-                try:
-                    bound = sig.bind_partial(*args, **kwargs)
-                    bound.apply_defaults()
-                    filtered = {
-                        k: v for k, v in bound.arguments.items() if k not in ignore
-                    }
-                    return ((), filtered)
-                except TypeError:
-                    pass
+            source = get_function_source(
+                value, recursive=(invalidate_on_source_change == "recursively")
+            )
+            source_hash = str(DEFAULT_HASH(source))
+        except (ValueError, OSError, TypeError) as e:
+            logger.warning(f"Could not get source for {value}: {e}")
 
-            # Fallback when binding fails and always_bind is False
-            if ignore and any(param in kwargs for param in ignore):
-                logging.error(
-                    f"Attempted to bind args to ignore {ignore} in {value!r} with signature {sig} but got {e}"
-                )
+    def compute_cache_tuple(
+        *args, **kwargs
+    ) -> tuple[tuple, dict[str, Any]] | tuple[tuple, dict[str, Any], str]:
+        base_tuple: tuple[tuple, dict[str, Any]]
+        if not always_bind and not ignore:
+            base_tuple = (args, kwargs)
+        else:
+            assert (
+                value is not None
+            ), "value must be provided if always_bind is True or ignore is not empty"
+            try:
+                bound = sig.bind(*args, **kwargs)
+                bound.apply_defaults()
+            except TypeError as e:
+                if always_bind:
+                    # For always_bind, try partial binding and apply defaults
+                    try:
+                        bound = sig.bind_partial(*args, **kwargs)
+                        bound.apply_defaults()
+                        filtered = {
+                            k: v for k, v in bound.arguments.items() if k not in ignore
+                        }
+                        base_tuple = ((), filtered)
+                    except TypeError:
+                        # Fallback when binding fails and always_bind is False
+                        if ignore and any(param in kwargs for param in ignore):
+                            logging.error(
+                                f"Attempted to bind args to ignore {ignore} in {value!r} with signature {sig} but got {e}"
+                            )
+                        base_tuple = (
+                            args,
+                            {k: v for k, v in kwargs.items() if k not in ignore},
+                        )
+                else:
+                    # Fallback when binding fails and always_bind is False
+                    if ignore and any(param in kwargs for param in ignore):
+                        logging.error(
+                            f"Attempted to bind args to ignore {ignore} in {value!r} with signature {sig} but got {e}"
+                        )
+                    base_tuple = (
+                        args,
+                        {k: v for k, v in kwargs.items() if k not in ignore},
+                    )
+            else:
+                filtered = {k: v for k, v in bound.arguments.items() if k not in ignore}
+                base_tuple = ((), filtered)
 
-            return (args, {k: v for k, v in kwargs.items() if k not in ignore})
-        filtered = {k: v for k, v in bound.arguments.items() if k not in ignore}
-        return ((), filtered)
+        # Add source hash if available
+        if source_hash is not None:
+            return (*base_tuple, source_hash)
+        else:
+            return base_tuple
 
     return compute_cache_tuple
 
@@ -842,6 +876,7 @@ def make_make_get_raw(
     allow_race: bool = True,
     ignore: Collection[str] = (),
     always_bind: bool = False,
+    invalidate_on_source_change: bool | Literal["recursively"] = False,
     validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
     print_validate_error: bool | None = None,
     validate_warn: bool | Callable[[str], None] = logger.warning,
@@ -942,7 +977,10 @@ def make_make_get_raw(
         get_hash_mem = get_hash
 
     compute_cache_tuple = make_compute_cache_tuple(
-        value, ignore=ignore, always_bind=always_bind
+        value,
+        ignore=ignore,
+        always_bind=always_bind,
+        invalidate_on_source_change=invalidate_on_source_change,
     )
 
     def make_get_raw(get_db):
@@ -1081,6 +1119,7 @@ def memoshelve(
     allow_race: bool = True,
     ignore: Collection[str] = (),
     always_bind: bool = False,
+    invalidate_on_source_change: bool | Literal["recursively"] = False,
     validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
     validate_warn: Callable[[str], None] = logger.warning,
     print_validate_error: bool | None = None,
@@ -1152,6 +1191,7 @@ def memoshelve(
         allow_race=allow_race,
         ignore=ignore,
         always_bind=always_bind,
+        invalidate_on_source_change=invalidate_on_source_change,
         validate=validate,
         validate_warn=validate_warn,
         print_validate_error=print_validate_error,
@@ -1275,6 +1315,7 @@ def async_memoshelve(
     allow_race: bool = True,
     ignore: Collection[str] = (),
     always_bind: bool = False,
+    invalidate_on_source_change: bool | Literal["recursively"] = False,
     validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
     validate_warn: Callable[[str], None] = DEFAULT_PRINT_VALIDATE_ERROR_FN,
     print_validate_error: bool | None = None,
@@ -1346,6 +1387,7 @@ def async_memoshelve(
         allow_race=allow_race,
         ignore=ignore,
         always_bind=always_bind,
+        invalidate_on_source_change=invalidate_on_source_change,
         validate=validate,
         validate_warn=validate_warn,
         print_validate_error=print_validate_error,
@@ -1455,6 +1497,7 @@ def uncache(
     get_hash_mem: Callable | None = None,
     ignore: Collection[str] = (),
     always_bind: bool = False,
+    invalidate_on_source_change: bool | Literal["recursively"] = False,
     value: Callable | None = None,
     **kwargs,
 ):
@@ -1485,7 +1528,10 @@ def uncache(
         get_hash_mem = get_hash
 
     cache_tuple = make_compute_cache_tuple(
-        value, ignore=ignore, always_bind=always_bind
+        value,
+        ignore=ignore,
+        always_bind=always_bind,
+        invalidate_on_source_change=invalidate_on_source_change,
     )(*args, **kwargs)
 
     with shelve.open(filename) as db:
@@ -1516,6 +1562,7 @@ def sync_cache(
     allow_race: bool = True,
     ignore: Collection[str] = (),
     always_bind: bool = False,
+    invalidate_on_source_change: bool | Literal["recursively"] = False,
     validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
     validate_warn: Callable[[str], None] = DEFAULT_PRINT_VALIDATE_ERROR_FN,
     print_validate_error: bool | None = None,
@@ -1602,6 +1649,7 @@ def sync_cache(
             allow_race=allow_race,
             ignore=ignore,
             always_bind=always_bind,
+            invalidate_on_source_change=invalidate_on_source_change,
             validate=validate,
             validate_warn=validate_warn,
             print_validate_error=print_validate_error,
@@ -1657,6 +1705,7 @@ def sync_cache(
             get_hash_mem=get_hash_mem,
             ignore=ignore,
             always_bind=always_bind,
+            invalidate_on_source_change=invalidate_on_source_change,
             value=value,
         )
         value.memoshelve = MemoCacheMetadata(
@@ -1691,6 +1740,7 @@ def async_cache(
     allow_race: bool = True,
     ignore: Collection[str] = (),
     always_bind: bool = False,
+    invalidate_on_source_change: bool | Literal["recursively"] = False,
     validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
     validate_warn: Callable[[str], None] = DEFAULT_PRINT_VALIDATE_ERROR_FN,
     print_validate_error: bool | None = None,
@@ -1725,6 +1775,7 @@ def async_cache(
             allow_race=allow_race,
             ignore=ignore,
             always_bind=always_bind,
+            invalidate_on_source_change=invalidate_on_source_change,
             validate=validate,
             validate_warn=validate_warn,
             print_validate_error=print_validate_error,
@@ -1780,6 +1831,7 @@ def async_cache(
             get_hash_mem=get_hash_mem,
             ignore=ignore,
             always_bind=always_bind,
+            invalidate_on_source_change=invalidate_on_source_change,
             value=value,
         )
         value.memoshelve = MemoCacheAsyncMetadata(
@@ -1814,6 +1866,7 @@ def cache(
     allow_race: bool = True,
     ignore: Collection[str] = (),
     always_bind: bool = False,
+    invalidate_on_source_change: bool | Literal["recursively"] = False,
     validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
     validate_warn: Callable[[str], None] = DEFAULT_PRINT_VALIDATE_ERROR_FN,
     print_validate_error: bool | None = None,
@@ -1839,6 +1892,7 @@ def cache(
                 allow_race=allow_race,
                 ignore=ignore,
                 always_bind=always_bind,
+                invalidate_on_source_change=invalidate_on_source_change,
                 validate=validate,
                 validate_warn=validate_warn,
                 print_validate_error=print_validate_error,
@@ -1861,6 +1915,7 @@ def cache(
                 allow_race=allow_race,
                 ignore=ignore,
                 always_bind=always_bind,
+                invalidate_on_source_change=invalidate_on_source_change,
                 validate=validate,
                 validate_warn=validate_warn,
                 print_validate_error=print_validate_error,
