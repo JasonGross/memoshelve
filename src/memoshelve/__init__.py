@@ -11,6 +11,7 @@ import shelve
 import time
 import traceback
 import dbm
+import errno
 from contextlib import asynccontextmanager, contextmanager
 from functools import partial, wraps
 from pathlib import Path
@@ -77,6 +78,12 @@ DEFAULT_CACHE_DIR = (
 DEFAULT_HASH = hash_via_stablehash if stablehash is not None else repr  # type: ignore
 DEFAULT_PRINT_VALIDATE_ERROR = True
 DEFAULT_PRINT_VALIDATE_ERROR_FN = logger.warning
+DEFAULT_RETRY_ERRORS = (
+    errno.EAGAIN,
+    errno.ENOSPC,
+    errno.EWOULDBLOCK,
+    errno.EBUSY,
+)
 
 
 def default_validate_fn(value: Any) -> bool | None:
@@ -160,6 +167,8 @@ def compact(
     remove_on_unknown_type: bool = False,
     validate: bool | None | Callable[[Any], bool | None] = DEFAULT_VALIDATE_FN,
     validate_warn: Callable[[str], None] = DEFAULT_PRINT_VALIDATE_ERROR_FN,
+    retry_on_errors: Collection[int] = DEFAULT_RETRY_ERRORS,
+    retry_delay: float = 0.1,
 ):
     """Compact a shelve database by removing corrupted entries.
 
@@ -177,32 +186,40 @@ def compact(
     """
     save_backup = False
     entries = {}
-    try:
-        with shelve.open(filename) as db:
-            for k in db.keys():
-                try:
-                    entries[k] = db[k]
-                except UnpicklingError:
-                    logger.warning(f"UnpicklingError for {k} in {filename}")
-    except Exception as e:
-        _gdbm_error = getattr(_gdbm, "error", _gdbm_dummy_error)
-        if not (
-            isinstance(e, _gdbm_error) or isinstance(e, dbm.error)
-        ):  # handle recovery
-            raise e
-        if not (
-            e.args
-            and isinstance(e.args, tuple)
-            and isinstance(e.args[0], str)
-            and e.args[0].startswith("db type could not be determined")
-            and remove_on_unknown_type
-        ):
-            raise e
-        backup = True
-        save_backup = True
-        logger.warning(
-            f"DB type could not be determined ({e}), removing {filename} and creating a new one"
-        )
+    e = None
+    while e is None or getattr(e, "errno", None) in retry_on_errors:
+        try:
+            with shelve.open(filename) as db:
+                for k in db.keys():
+                    try:
+                        entries[k] = db[k]
+                    except UnpicklingError:
+                        logger.warning(f"UnpicklingError for {k} in {filename}")
+        except Exception as e:
+            if getattr(e, "errno", None) in retry_on_errors:
+                logger.warning(
+                    f"Error {e} in {filename}, retrying in {retry_delay} seconds..."
+                )
+                time.sleep(retry_delay)
+                continue
+            _gdbm_error = getattr(_gdbm, "error", _gdbm_dummy_error)
+            if not (
+                isinstance(e, _gdbm_error) or isinstance(e, dbm.error)
+            ):  # handle recovery
+                raise e
+            if not (
+                e.args
+                and isinstance(e.args, tuple)
+                and isinstance(e.args[0], str)
+                and e.args[0].startswith("db type could not be determined")
+                and remove_on_unknown_type
+            ):
+                raise e
+            backup = True
+            save_backup = True
+            logger.warning(
+                f"DB type could not be determined ({e}), removing {filename} and creating a new one"
+            )
     if validate is not None and validate is not False:
         for k, v in list(entries.items()):
             try:
@@ -331,7 +348,13 @@ def upgrade(
 
 
 @contextmanager
-def lazy_shelve_open(filename: Path | str, *, eager: bool = False):
+def lazy_shelve_open(
+    filename: Path | str,
+    *,
+    eager: bool = False,
+    retry_on_errors: Collection[int] = DEFAULT_RETRY_ERRORS,
+    retry_delay: float = 0.1,
+):
     """Context manager for lazy shelve database opening with retry logic.
 
     Provides a context manager that returns a function to open shelve databases.
@@ -371,14 +394,17 @@ def lazy_shelve_open(filename: Path | str, *, eager: bool = False):
                 try:
                     sh = shelve.open(filename)
                 except Exception as e:
-                    if e.args == (11, "Resource temporarily unavailable"):
-                        time.sleep(0.1)
+                    if getattr(e, "errno", None) in retry_on_errors:
+                        logger.warning(
+                            f"Error {e} in {filename}, retrying in {retry_delay} seconds..."
+                        )
+                        time.sleep(retry_delay)
+                        continue
+                    if len(e.args) == 1 and isinstance(e.args[0], str):
+                        e.args = (e.args[0] + f" ({filename})",)
                     else:
-                        if len(e.args) == 1 and isinstance(e.args[0], str):
-                            e.args = (e.args[0] + f" ({filename})",)
-                        else:
-                            e.args = (*e.args, filename)
-                        raise e
+                        e.args = (*e.args, filename)
+                    raise e
             with sh as db:
                 yield db
 
