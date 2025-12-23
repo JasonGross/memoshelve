@@ -31,7 +31,7 @@ jobs:
     - name: Build a binary wheel and a source tarball
       run: uv build
     - name: Store the distribution packages
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: python-package-distributions
         path: dist/
@@ -43,7 +43,7 @@ jobs:
           tar -czf modified-files.tar.gz --files-from /dev/null
         fi
     - name: Store the modified files
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: modified-files
         path: modified-files.tar.gz
