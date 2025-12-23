@@ -1009,13 +1009,22 @@ def make_make_get_raw(
                 key = str(get_hash(cache_tuple))
                 try:
                     with get_db() as db:
-                        mem_db[mkey] = upgrade_value_or_raise(
-                            db[key],
-                            key=key,
-                            filename=filename,
-                            validate=validate,
-                            validate_warn=validate_warn,
-                        )
+                        try:
+                            mem_db[mkey] = upgrade_value_or_raise(
+                                db[key],
+                                key=key,
+                                filename=filename,
+                                validate=validate,
+                                validate_warn=validate_warn,
+                            )
+                        except RecursionError as e:
+                            try:
+                                del db[key]
+                            except (KeyboardInterrupt, SystemExit):
+                                raise
+                            except Exception:
+                                pass
+                            raise KeyError(e) from e
                     print_disk_cache_hit(f"Cache hit (disk: {filename}): {key}")
                     result = mem_db[mkey]
                     assert isinstance(result, dict), result
