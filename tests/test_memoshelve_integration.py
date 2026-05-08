@@ -402,5 +402,67 @@ class TestCustomHashStrategies:
         assert status == "cached (mem)"
 
 
+class TestSetstateUnpicklingError:
+    """Test that __setstate__ errors during unpickling are treated as cache misses."""
+
+    def test_setstate_error_treated_as_cache_miss(self, temp_dir):
+        """If __setstate__ raises during unpickling from disk, treat as a cache miss."""
+        import shelve
+        import pickle
+
+        cache_file = temp_dir / "setstate_error.shelve"
+        call_count = 0
+
+        class BadSetstate:
+            def __getstate__(self):
+                return {"ok": True}
+
+            def __setstate__(self, state):
+                raise FileNotFoundError("simulated missing file")
+
+        @cache(filename=cache_file)
+        def make_obj(x):
+            nonlocal call_count
+            call_count += 1
+            return BadSetstate()
+
+        # First call: computes and stores to disk
+        # The result is also kept in mem_db, so no unpickling needed yet
+        result = make_obj(42)
+        assert call_count == 1
+        assert isinstance(result, BadSetstate)
+
+        # Clear the in-memory cache dict that mem_db references
+        for v in memoshelve_cache.values():
+            v.clear()
+
+        # Second call: reads from disk, __setstate__ raises FileNotFoundError
+        # This should be treated as a cache miss, not crash
+        result2 = make_obj(42)
+        assert call_count == 2  # function was called again (cache miss)
+
+    def test_setstate_keyboard_interrupt_not_swallowed(self, temp_dir):
+        """KeyboardInterrupt in __setstate__ should propagate, not be treated as cache miss."""
+        cache_file = temp_dir / "setstate_kbi.shelve"
+
+        class KBISetstate:
+            def __getstate__(self):
+                return {"ok": True}
+
+            def __setstate__(self, state):
+                raise KeyboardInterrupt()
+
+        @cache(filename=cache_file)
+        def make_obj(x):
+            return KBISetstate()
+
+        make_obj(1)
+        for v in memoshelve_cache.values():
+            v.clear()
+
+        with pytest.raises(KeyboardInterrupt):
+            make_obj(1)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
