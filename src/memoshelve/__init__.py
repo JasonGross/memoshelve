@@ -182,8 +182,18 @@ def compact(
             for k in db.keys():
                 try:
                     entries[k] = db[k]
+                except (KeyboardInterrupt, SystemExit):
+                    raise
                 except UnpicklingError:
                     logger.warning(f"UnpicklingError for {k} in {filename}")
+                except Exception as e:
+                    tb = traceback.extract_tb(e.__traceback__)
+                    if any(f.name == "__setstate__" for f in tb):
+                        logger.warning(
+                            f"__setstate__ error for {k} in {filename}: {e}"
+                        )
+                    else:
+                        raise
     except Exception as e:
         _gdbm_error = getattr(_gdbm, "error", _gdbm_dummy_error)
         if not (
@@ -1017,14 +1027,27 @@ def make_make_get_raw(
                                 validate=validate,
                                 validate_warn=validate_warn,
                             )
-                        except RecursionError as e:
-                            try:
-                                del db[key]
-                            except (KeyboardInterrupt, SystemExit):
+                        except (KeyboardInterrupt, SystemExit):
+                            raise
+                        except Exception as e:
+                            tb = traceback.extract_tb(e.__traceback__)
+                            is_setstate = any(
+                                f.name == "__setstate__" for f in tb
+                            )
+                            if not is_setstate and (
+                                isinstance(e, _gdbm_error)
+                                or isinstance(e, dbm.error)
+                            ):
                                 raise
-                            except Exception:
-                                pass
-                            raise KeyError(e) from e
+                            if isinstance(e, RecursionError) or is_setstate:
+                                try:
+                                    del db[key]
+                                except (KeyboardInterrupt, SystemExit):
+                                    raise
+                                except Exception:
+                                    pass
+                                raise KeyError(e) from e
+                            raise
                     print_disk_cache_hit(f"Cache hit (disk: {filename}): {key}")
                     result = mem_db[mkey]
                     assert isinstance(result, dict), result
