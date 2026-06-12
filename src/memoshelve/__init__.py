@@ -3,6 +3,11 @@ try:
 except ImportError:
     _gdbm = None
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # Windows: flock is unavailable; locking degrades to a no-op
+
 from copy import deepcopy
 import inspect
 import logging
@@ -153,6 +158,45 @@ def validate_value_or_raise_and_warn(
     raise exn
 
 
+@contextmanager
+def _shelve_file_lock(filename: Path | str):
+    """Exclusive inter-process lock on a sidecar ``<filename>.lock`` file.
+
+    ``dbm.open`` determines the database type by reading the file with no
+    locking at all (``dbm.whichdb``), so a concurrent reader can observe a
+    half-created database -- e.g. a 0-byte file between gdbm's
+    ``open(O_CREAT)`` and its header write, or ``compact``'s
+    remove-and-recreate window -- and fail with
+    "db type could not be determined".  Holding this lock around every
+    ``shelve.open`` and for the duration of ``compact``/``upgrade`` makes
+    those states unobservable.
+
+    Not reentrant: code already holding the lock must call ``shelve.open``
+    directly rather than via ``_locked_shelve_open``.  Degrades to a no-op
+    where fcntl is unavailable (Windows).
+    """
+    if fcntl is None:
+        yield
+        return
+    fd = os.open(str(filename) + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _locked_shelve_open(filename: Path | str, *args, **kwargs) -> shelve.Shelf:
+    """``shelve.open`` under ``_shelve_file_lock``; the lock is released as
+    soon as the database is open (the dbm backend's own locking takes over
+    from there)."""
+    with _shelve_file_lock(filename):
+        return shelve.open(filename, *args, **kwargs)
+
+
 def compact(
     filename: Path | str,
     backup: bool = True,
@@ -177,66 +221,67 @@ def compact(
     """
     save_backup = False
     entries = {}
-    try:
-        with shelve.open(filename) as db:
-            for k in db.keys():
-                try:
-                    entries[k] = db[k]
-                except (KeyboardInterrupt, SystemExit):
-                    raise
-                except UnpicklingError:
-                    logger.warning(f"UnpicklingError for {k} in {filename}")
-                except Exception as e:
-                    tb = traceback.extract_tb(e.__traceback__)
-                    if any(f.name == "__setstate__" for f in tb):
-                        logger.warning(
-                            f"__setstate__ error for {k} in {filename}: {e}"
-                        )
-                    else:
+    with _shelve_file_lock(filename):
+        try:
+            with shelve.open(filename) as db:
+                for k in db.keys():
+                    try:
+                        entries[k] = db[k]
+                    except (KeyboardInterrupt, SystemExit):
                         raise
-    except Exception as e:
-        _gdbm_error = getattr(_gdbm, "error", _gdbm_dummy_error)
-        if not (
-            isinstance(e, _gdbm_error) or isinstance(e, dbm.error)
-        ):  # handle recovery
-            raise e
-        if not (
-            e.args
-            and isinstance(e.args, tuple)
-            and isinstance(e.args[0], str)
-            and e.args[0].startswith("db type could not be determined")
-            and remove_on_unknown_type
-        ):
-            raise e
-        backup = True
-        save_backup = True
-        logger.warning(
-            f"DB type could not be determined ({e}), removing {filename} and creating a new one"
-        )
-    if validate is not None and validate is not False:
-        for k, v in list(entries.items()):
-            try:
-                validate_value_or_raise_and_warn(
-                    v,
-                    validate=validate,
-                    key=k,
-                    filename=filename,
-                    exn=KeyError(),
-                    warn_fn=validate_warn,
-                )
-            except KeyError:
-                del entries[k]
-    if backup:
-        backup_name = backup_file(filename)
-    else:
-        backup_name = None
-        os.remove(filename)
-    with shelve.open(filename) as db:
-        for k in entries.keys():
-            db[k] = entries[k]
-    if backup_name and not save_backup:
-        assert backup_name != filename, backup_name
-        os.remove(backup_name)
+                    except UnpicklingError:
+                        logger.warning(f"UnpicklingError for {k} in {filename}")
+                    except Exception as e:
+                        tb = traceback.extract_tb(e.__traceback__)
+                        if any(f.name == "__setstate__" for f in tb):
+                            logger.warning(
+                                f"__setstate__ error for {k} in {filename}: {e}"
+                            )
+                        else:
+                            raise
+        except Exception as e:
+            _gdbm_error = getattr(_gdbm, "error", _gdbm_dummy_error)
+            if not (
+                isinstance(e, _gdbm_error) or isinstance(e, dbm.error)
+            ):  # handle recovery
+                raise e
+            if not (
+                e.args
+                and isinstance(e.args, tuple)
+                and isinstance(e.args[0], str)
+                and e.args[0].startswith("db type could not be determined")
+                and remove_on_unknown_type
+            ):
+                raise e
+            backup = True
+            save_backup = True
+            logger.warning(
+                f"DB type could not be determined ({e}), removing {filename} and creating a new one"
+            )
+        if validate is not None and validate is not False:
+            for k, v in list(entries.items()):
+                try:
+                    validate_value_or_raise_and_warn(
+                        v,
+                        validate=validate,
+                        key=k,
+                        filename=filename,
+                        exn=KeyError(),
+                        warn_fn=validate_warn,
+                    )
+                except KeyError:
+                    del entries[k]
+        if backup:
+            backup_name = backup_file(filename)
+        else:
+            backup_name = None
+            os.remove(filename)
+        with shelve.open(filename) as db:
+            for k in entries.keys():
+                db[k] = entries[k]
+        if backup_name and not save_backup:
+            assert backup_name != filename, backup_name
+            os.remove(backup_name)
 
 
 def upgrade_value(value: Any) -> Optional[dict]:
@@ -309,35 +354,36 @@ def upgrade(
         Various IO errors: From file operations
     """
     filename = Path(filename)
-    with shelve.open(filename) as db:
-        old_entries = dict(db.items())
+    with _shelve_file_lock(filename):
+        with shelve.open(filename) as db:
+            old_entries = dict(db.items())
 
-    entries = {}
-    remove_backup = True
-    for k, stored in old_entries.items():
-        new_value = upgrade_value(stored)
-        if new_value is not None:
-            new_key = (
-                str(new_hash((stored["args"], stored["kwargs"]))) if new_hash else k
-            )
-            entries[new_key] = new_value
+        entries = {}
+        remove_backup = True
+        for k, stored in old_entries.items():
+            new_value = upgrade_value(stored)
+            if new_value is not None:
+                new_key = (
+                    str(new_hash((stored["args"], stored["kwargs"]))) if new_hash else k
+                )
+                entries[new_key] = new_value
+            else:
+                remove_backup = remove_backup_on_failure
+                logger.warning(
+                    f"Skipping non-upgradable entry {k} with value {stored} in {filename}"
+                )
+
+        if backup:
+            backup_name = backup_file(filename)
         else:
-            remove_backup = remove_backup_on_failure
-            logger.warning(
-                f"Skipping non-upgradable entry {k} with value {stored} in {filename}"
-            )
-
-    if backup:
-        backup_name = backup_file(filename)
-    else:
-        backup_name = None
-        if filename.exists():
-            os.remove(filename)
-    with shelve.open(filename) as db:
-        for k, v in entries.items():
-            db[k] = v
-    if backup_name and remove_backup:
-        os.remove(backup_name)
+            backup_name = None
+            if filename.exists():
+                os.remove(filename)
+        with shelve.open(filename) as db:
+            for k, v in entries.items():
+                db[k] = v
+        if backup_name and remove_backup:
+            os.remove(backup_name)
 
 
 @contextmanager
@@ -364,7 +410,7 @@ def lazy_shelve_open(filename: Path | str, *, eager: bool = False):
         ```
     """
     if eager:
-        with shelve.open(filename) as db:
+        with _locked_shelve_open(filename) as db:
 
             @contextmanager
             def get_db():
@@ -379,7 +425,7 @@ def lazy_shelve_open(filename: Path | str, *, eager: bool = False):
             sh = None
             while sh is None:
                 try:
-                    sh = shelve.open(filename)
+                    sh = _locked_shelve_open(filename)
                 except Exception as e:
                     if e.args == (11, "Resource temporarily unavailable"):
                         time.sleep(0.1)
@@ -1566,7 +1612,7 @@ def uncache(
         invalidate_on_source_change=invalidate_on_source_change,
     )(*args, **kwargs)
 
-    with shelve.open(filename) as db:
+    with _locked_shelve_open(filename) as db:
         mkey = get_hash_mem(cache_tuple)
         if mkey in mem_db:
             del mem_db[mkey]
